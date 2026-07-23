@@ -9,6 +9,8 @@ def schedule_task():
     target_time = input(
         "Enter launch time in 24-hr format (HH:MM, e.g., 14:30): "
     ).strip()
+    target_date = input(
+        "Enter launch date in (YYYY-MM-DD, e.g., 2006-04-05): "
 
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -21,8 +23,9 @@ def schedule_task():
     # Build the schtasks command
     # /sc once = Run once
     # /st HH:MM = Start time
+    # /sd YYYY-MM-DD = Start date
     # /f = Force overwrite if a task with this name already exists
-    cmd = f'schtasks /create /tn "{task_name}" /tr "{action_cmd}" /sc once /st {target_time} /f'
+    cmd = f'schtasks /create /tn "{task_name}" /tr "{action_cmd}" /sc once /st {target_time} /sd {target_date}/f'
 
     print("\nRegistering background task with Windows...")
 
