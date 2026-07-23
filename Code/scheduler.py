@@ -10,7 +10,8 @@ def schedule_task():
         "Enter launch time in 24-hr format (HH:MM, e.g., 14:30): "
     ).strip()
     target_date = input(
-        "Enter launch date in (YYYY-MM-DD, e.g., 2006-04-05): "
+        "Enter launch date in (DD/MM/YYYY, e.g., 05/04/2023): ").strip()
+	
 
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -18,14 +19,14 @@ def schedule_task():
     task_name = "AutoWebLauncher"
 
     # Command that Windows will run silently in the background
-    action_cmd = f'cmd.exe /c start "" "{url}"'
+    action_cmd = f"explorer.exe {url}"
 
     # Build the schtasks command
     # /sc once = Run once
     # /st HH:MM = Start time
     # /sd YYYY-MM-DD = Start date
     # /f = Force overwrite if a task with this name already exists
-    cmd = f'schtasks /create /tn "{task_name}" /tr "{action_cmd}" /sc once /st {target_time} /sd {target_date}/f'
+    cmd = f'schtasks /create /tn "{task_name}" /tr "{action_cmd}" /sc once /st {target_time} /sd {target_date} /f'
 
     print("\nRegistering background task with Windows...")
 
