@@ -11,8 +11,7 @@ def schedule_task():
     ).strip()
     target_date = input(
         "Enter launch date (DD/MM/YYYY, e.g., 05/04/2026): "
-	).strip()
-	
+    ).strip()
 
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -45,16 +44,22 @@ def schedule_task():
     # /st HH:MM = Start time
     # /sd YYYY-MM-DD = Start date
     # /f = Force overwrite if a task with this name already exists
-    
-	cmd = [
-	    "schtasks", "/create",
-	    "/tn", task_name,
-	    "/tr", action_cmd,
-	    "/sc", "once",
-	    "/st", target_time,
-	    "/sd", normalized_date,
-	    "/f",
-	]
+
+    cmd = [
+        "schtasks",
+        "/create",
+        "/tn",
+        task_name,
+        "/tr",
+        action_cmd,
+        "/sc",
+        "once",
+        "/st",
+        target_time,
+        "/sd",
+        normalized_date,
+        "/f",
+    ]
 
     print("\nRegistering background task with Windows...")
 
@@ -62,12 +67,15 @@ def schedule_task():
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode == 0:
-        print(f"SUCCESS: Scheduled '{url}' for {target_time} on {normalized_date}!")
+        print(
+            f"SUCCESS: Scheduled '{url}' for {target_time} on"
+            f" {normalized_date}!"
+        )
         print("You can close this terminal now. Windows will launch it.")
     else:
         print("ERROR: Could not create schedule.")
         print(result.stderr)
-		print(
+        print(
             "\nTip: if this mentions an invalid date format, your Windows "
             "locale may not be DD/MM/YYYY — check Settings > Time & "
             "Language > Language & Region > Regional format."
