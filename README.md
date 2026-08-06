@@ -1,7 +1,7 @@
 # Schedule Website Launcher V2.0
 
 ## Setup
-1. Download 'code' folder.
+1. Download this repo.
 2. Double-click `run_scheduler.bat` in the 'code' folder.
 3. Give the website URL, launch time (HH:MM, 24-hr) and launch date (DD/MM/YYYY).
 4. If it shows `SUCCESS: Scheduled...`, it worked.
