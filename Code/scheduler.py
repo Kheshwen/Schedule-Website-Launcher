@@ -47,13 +47,13 @@ def schedule_task():
     # /f = Force overwrite if a task with this name already exists
     
 	cmd = [
-    	"schtasks", "/create",
-    	"/tn", task_name,
-    	"/tr", action_cmd,
-    	"/sc", "once",
-    	"/st", target_time,
-    	"/sd", normalized_date,
-    	"/f",
+	    "schtasks", "/create",
+	    "/tn", task_name,
+	    "/tr", action_cmd,
+	    "/sc", "once",
+	    "/st", target_time,
+	    "/sd", normalized_date,
+	    "/f",
 	]
 
     print("\nRegistering background task with Windows...")
