@@ -1,4 +1,4 @@
-# Schedule Website Launcher V2.0
+# Schedule Website Launcher V1.1
 
 ## Setup
 1. Download this repo.
@@ -37,5 +37,4 @@ and looking for a task named `AutoWebLauncher`.
 - A config file or .env for defaults instead of retyping URL each time.
 
 ## Developer Word
-I created it so i can have it launch twitch for twitch drops. Hope it's goes well.
-
+- Nice...
