@@ -21,6 +21,21 @@ You can confirm it's saved anytime by opening Task Scheduler (`taskschd.msc`)
 and looking for a task named `AutoWebLauncher`.
 
 ## Restrictions
-- Only one scheduled link at a time — running the script again overwrites the
+- Only one scheduled link at a time and running the script again overwrites the
   previous `AutoWebLauncher` task (since `/f` force-overwrites by name).
 - Windows only.
+
+## Future Improvement (Priority Scaled - Desc)
+- Input validation feedback loop (currently exits on bad input — could re-prompt instead).
+- A simple GUI (Tkinter) instead of CMD prompts.
+- Support multiple scheduled links at once (currently overwrites AutoWebLauncher each time).
+- A "list/cancel scheduled tasks" option, so they don't have to dig into Task Scheduler manually.
+- Support MacOS and Linux (I'm also running Linux).
+- Recurring schedules (daily/weekly), not just one-off.
+- Add error logging to a file, not just console output.
+- Unit tests for the date/time validation logic.
+- A config file or .env for defaults instead of retyping URL each time.
+
+## Developer Word
+I created it so i can have it launch twitch for twitch drops. Hope it's goes well.
+
