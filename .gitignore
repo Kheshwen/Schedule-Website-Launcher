@@ -9,3 +9,12 @@ env/
 
 # Logs
 *.log
+
+# PyInstaller build folders
+build/
+dist/
+*.spec
+
+# OS hidden files
+.DS_Store
+Thumbs.db
