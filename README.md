@@ -1,40 +1,53 @@
-# Schedule Website Launcher V1.1
+# Schedule Website Launcher v2.0
 
 ## Setup
 1. Download this repo.
-2. Double-click `run_scheduler.bat` in the 'code' folder.
-3. Give the website URL, launch time (HH:MM, 24-hr) and launch date (DD/MM/YYYY).
-4. If it shows `SUCCESS: Scheduled...`, it worked.
+2. Double-click `setup.bat` in the 'src' folder.
+3. If it shows `Build complete! ...`, it worked.
 
-## What changed from V1.0
-- No more manual CMD — `run_scheduler.bat` runs the script for you.
-- Time and date are now validated before scheduling (rejects bad formats and past dates).
-- Command is passed safely to `schtasks` instead of as a raw shell string.
+## Quick Start Guide
+### 1. Scheduling a Website
+1. Navigate to 'src/dist' and find 'scheduler.exe' application.
+2. **Website URL:** Enter the link you want to open (e.g., `youtube.com`). The app will automatically add `https://` if you forget it.
+3. **Date:** Enter the launch date in `DD/MM/YYYY` format (e.g., `21/08/2026`).
+4. **Time:** Enter the launch time in 24-hour format (e.g., `14:30` for 2:30 PM).
+5. Click **Schedule Launch**. A success popup will appear.
 
-## Does it survive a restart?
-Yes. `schtasks /create` registers the task directly with Windows Task Scheduler,
-not with this Python script — so once it's scheduled, it will still fire even if
-you shut down, restart or never open this folder again. You only need to run
-the script once per scheduled link.
+### 2. Managing & Canceling Tasks
+* **View Tasks:** The bottom half of the application displays a list of all your active scheduled links. Click **Refresh List** to ensure it is up to date.
+* **Cancel a Launch:** If you made a mistake or changed your mind, click on a task in the list to highlight it, then click **Delete Selected Task**.
 
-You can confirm it's saved anytime by opening Task Scheduler (`taskschd.msc`)
-and looking for a task named `AutoWebLauncher`.
+## How to Uninstall
+Because this is a standalone executable, it does not install deep into your system registry. To completely remove it:   
+
+1. Open the app, highlight any active tasks in your list, and click **Delete Selected Task** so no hidden timers are left on your PC.
+2. Close the application.
+3. Delete the `scheduler.exe` file. That's it!
+
+## What changed from V1.1
+- **Visual Interface:** Completely replaced the command-line interface with a clean, easy-to-use graphical user interface (GUI) built with Tkinter.
+- **Standalone App:** Packaged the entire Python script into a single `scheduler.exe` file. Users no longer need to install Python or run scripts to use the tool.
+- **Task Management Dashboard:** Added a built-in window to view active tasks, refresh the task list, and easily delete scheduled launches directly from the app.
+- **Safer Inputs:** Date and time inputs are now handled through visual form fields with strict popup validation, preventing accidental typos from crashing the scheduler.
+- **Developer Tooling:** Added a `build.bat` script so developers can instantly re-compile the `.exe` file without typing out terminal commands.
 
 ## Restrictions
-- Only one scheduled link at a time and running the script again overwrites the
-  previous `AutoWebLauncher` task (since `/f` force-overwrites by name).
+- PC Must Be Awake.
 - Windows only.
+- It will only open default browser.
+- Strict formatting when you enter date and time.
 
-## Future Improvement (Priority Scaled - Desc)
-- Input validation feedback loop (currently exits on bad input — could re-prompt instead).
-- A simple GUI (Tkinter) instead of CMD prompts.
-- Support multiple scheduled links at once (currently overwrites AutoWebLauncher each time).
-- A "list/cancel scheduled tasks" option, so they don't have to dig into Task Scheduler manually.
+## Future Improvement (Priority Scaled: Top to Bottom)
 - Support MacOS and Linux (I'm also running Linux).
 - Recurring schedules (daily/weekly), not just one-off.
 - Add error logging to a file, not just console output.
 - Unit tests for the date/time validation logic.
 - A config file or .env for defaults instead of retyping URL each time.
+- Minimize application to the system tray so the GUI doesn't have to stay open on the taskbar.
+- Expand support to schedule and launch local files and applications, rather than just website URLs.
+- Upgrade to CustomTkinter or PyQt for a modern UI with native dark mode.
+- Convert to a local web dashboard (Flask/FastAPI) to allow remote scheduling from other devices.
+- Use an internal Python scheduling library (like APScheduler) to bypass Windows schtasks entirely.
 
-## Developer Word
-- Nice...
+## Developer Note
+- This is looking good...
