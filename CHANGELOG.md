@@ -1,6 +1,6 @@
 # Changelog
 
-## [2.0] 
+## [2.0] - August 21 2026
 ### Added
 - Complete Tkinter graphical user interface (GUI).
 - Task management: View, list, and delete scheduled tasks directly in the app.
@@ -11,13 +11,13 @@
 - Date and time formats are strictly validated via UI popups.
 - Updated `README.md` with new `.exe` setup instructions and updated `.gitignore` for PyInstaller.
 
-## [1.1]
+## [1.1] - August 6 2026
 ### Added
 - Input validation for date and time fields.
 - `run_scheduler.bat` wrapper to automate script execution.
 ### Fixed
 - Addressed command injection vulnerability by passing `cmd` as an array to `subprocess`.
 
-## [1.0] 
+## [1.0] - July 23 2026
 ### Added
 - Initial command-line release utilizing Windows `schtasks`.
