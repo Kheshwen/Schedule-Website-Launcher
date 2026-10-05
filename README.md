@@ -47,13 +47,6 @@
 - **Faster Task List:** The list now uses PowerShell to fetch only this app's tasks instead of scanning all of them.
 - **Folder Build and Installer:** The app is now built as a folder (`--onedir`) instead of a single `.exe`, which Windows flags less often, with an optional Inno Setup installer.
 
-## What changed from V1.1
-- **Visual Interface:** Completely replaced the command-line interface with a clean, easy-to-use graphical user interface (GUI) built with Tkinter.
-- **Packaged App:** Packaged the Python script into an executable. Users no longer need to install Python or run scripts to use the tool.
-- **Task Management Dashboard:** Added a built-in window to view active tasks, refresh the task list, and easily delete scheduled launches directly from the app.
-- **Safer Inputs:** Inputs are validated with popup warnings, preventing accidental typos from crashing the scheduler.
-- **Developer Tooling:** Added a `setup.bat` script so developers can instantly re-compile the app without typing out terminal commands.
-
 ## Restrictions
 - PC must be awake.
 - Windows 10 or 11 only.
