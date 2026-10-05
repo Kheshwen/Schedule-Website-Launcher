@@ -1,5 +1,5 @@
+@echo off
 cd /d "%~dp0"
-<<<<<<< Updated upstream
 
 echo Checking PyInstaller...
 python -m PyInstaller --version >nul 2>&1
@@ -23,9 +23,3 @@ if errorlevel 1 (
     echo Build complete! Your .exe is in the 'dist' folder.
 )
 pause
-=======
-echo Building the V2.0 Executable...
-python -m PyInstaller --noconsole --onefile scheduler.py
-echo Build complete! Your new .exe is in the 'dist' folder.
-pause
->>>>>>> Stashed changes
