@@ -13,7 +13,7 @@ rmdir /s /q build dist 2>nul
 del /q "Website Launcher.spec" 2>nul
 
 echo Building the V3.0 Executable...
-python -m PyInstaller --noconsole --onefile --clean --icon icon.ico --name "Website Launcher" scheduler.py
+python -m PyInstaller --noconsole --onedir --clean --icon icon.ico --name "Website Launcher" scheduler.py
 
 if errorlevel 1 (
     echo.
