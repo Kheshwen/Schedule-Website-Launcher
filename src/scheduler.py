@@ -14,7 +14,7 @@ PS_LIST = (
     "Get-ScheduledTask -TaskName 'AutoWeb_*' -ErrorAction SilentlyContinue | ForEach-Object { "
     "$i = $_ | Get-ScheduledTaskInfo; $n = ''; "
     "if ($i.NextRunTime -and $i.NextRunTime.Year -gt 2000) { $n = $i.NextRunTime.ToString('dd/MM/yyyy HH:mm') }; "
-    "[pscustomobject]@{Name=$_.TaskName; Next=$n} } | ConvertTo-Csv -NoTypeInformation"
+    "[pscustomobject]@{Name=$_.TaskName; Next=$n; Args=$_.Actions[0].Arguments} } | ConvertTo-Csv -NoTypeInformation"
 )
 
 
@@ -98,6 +98,7 @@ class WebSchedulerApp:
         bf.pack(fill="x", padx=10, pady=(0, 10))
         ttk.Button(bf, text="Refresh", command=self.refresh_task_list).pack(side="left", padx=5)
         ttk.Button(bf, text="Clear Past Tasks", command=self.clear_past).pack(side="left", padx=5)
+        ttk.Button(bf, text="Edit Selected", command=self.edit_selected).pack(side="left", padx=5)
         ttk.Button(bf, text="Delete Selected", command=self.delete_selected).pack(side="right", padx=5)
 
     # ---------- Inputs ----------
@@ -146,7 +147,7 @@ class WebSchedulerApp:
         if not dt:
             return
         name = f"{TASK_PREFIX}SHUTDOWN_{datetime.now():%H%M%S}"
-
+        # 60-second countdown after it triggers, so you have time to abort
         if self.create_task(name, "shutdown.exe /s /t 60", dt):
             messagebox.showinfo("Success", f"PC will start shutting down at {dt:%d/%m/%Y %H:%M} (60 sec countdown).")
 
@@ -160,6 +161,7 @@ class WebSchedulerApp:
     # ---------- Task list ----------
     def refresh_task_list(self):
         self.tree.delete(*self.tree.get_children())
+        self.args = {}
         try:
             result = run(["powershell", "-NoProfile", "-Command", PS_LIST])
         except Exception:
@@ -168,6 +170,7 @@ class WebSchedulerApp:
             return
         for row in csv.DictReader(StringIO(result.stdout)):
             name, nxt = row.get("Name", ""), row.get("Next", "")
+            self.args[name] = row.get("Args", "")
             self.tree.insert("", "end", iid=name, values=(name, nxt or "-", "Pending" if nxt else "Done"))
 
     def delete_tasks(self, names):
@@ -191,6 +194,82 @@ class WebSchedulerApp:
             return
         if messagebox.askyesno("Clear Past Tasks", f"Delete {len(names)} finished task(s)?"):
             self.delete_tasks(names)
+
+    # ---------- Edit ----------
+    def edit_selected(self):
+        sel = self.tree.selection()
+        if len(sel) != 1:
+            messagebox.showinfo("Selection Required", "Please select one task to edit.")
+            return
+        name = sel[0]
+        is_shutdown = "SHUTDOWN" in name
+        try:
+            d = datetime.strptime(self.tree.item(name, "values")[1], "%d/%m/%Y %H:%M")
+        except ValueError:  # past task has no next run time
+            d = datetime.now() + timedelta(minutes=5)
+
+        win = tk.Toplevel(self.root)
+        win.title("Edit Task")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+        ttk.Label(win, text=name).grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 5))
+
+        url_var = tk.StringVar(value=self.args.get(name, "").strip().strip('"'))
+        if not is_shutdown:
+            ttk.Label(win, text="Website URL:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+            ttk.Entry(win, textvariable=url_var, width=45).grid(row=1, column=1, padx=10)
+
+        v = {k: tk.StringVar(value=val) for k, val in (
+            ("d", f"{d.day:02d}"), ("m", f"{d.month:02d}"), ("y", str(d.year)),
+            ("h", f"{d.hour:02d}"), ("min", f"{d.minute:02d}"))}
+
+        ttk.Label(win, text="Date:").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+        dr = ttk.Frame(win)
+        dr.grid(row=2, column=1, sticky="w", padx=10)
+        self.combo(dr, v["d"], [f"{i:02d}" for i in range(1, 32)], 4).pack(side="left")
+        ttk.Label(dr, text="/").pack(side="left")
+        self.combo(dr, v["m"], [f"{i:02d}" for i in range(1, 13)], 4).pack(side="left")
+        ttk.Label(dr, text="/").pack(side="left")
+        self.combo(dr, v["y"], [str(datetime.now().year + i) for i in range(4)], 6).pack(side="left")
+
+        ttk.Label(win, text="Time (24h):").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+        tr = ttk.Frame(win)
+        tr.grid(row=3, column=1, sticky="w", padx=10)
+        self.combo(tr, v["h"], [f"{i:02d}" for i in range(24)], 4).pack(side="left")
+        ttk.Label(tr, text=":").pack(side="left")
+        self.combo(tr, v["min"], [f"{i:02d}" for i in range(60)], 4).pack(side="left")
+
+        def save():
+            try:
+                dt = datetime(int(v["y"].get()), int(v["m"].get()), int(v["d"].get()),
+                              int(v["h"].get()), int(v["min"].get()))
+            except ValueError:
+                messagebox.showwarning("Input Error", "That date doesn't exist.", parent=win)
+                return
+            if dt <= datetime.now():
+                messagebox.showwarning("Input Error", "The time must be in the future.", parent=win)
+                return
+            cmd = ["schtasks", "/change", "/tn", name, "/st", dt.strftime("%H:%M"), "/sd", dt.strftime("%d/%m/%Y")]
+            if not is_shutdown:
+                url = url_var.get().strip()
+                if not url:
+                    messagebox.showwarning("Input Error", "URL cannot be empty.", parent=win)
+                    return
+                if not url.startswith(("http://", "https://")):
+                    url = "https://" + url
+                cmd += ["/tr", f'explorer.exe "{url}"']
+            result = run(cmd)
+            if result.returncode == 0:
+                win.destroy()
+                self.refresh_task_list()
+            else:
+                messagebox.showerror("System Error", f"Could not update task.\n\n{result.stderr}", parent=win)
+
+        bf = ttk.Frame(win)
+        bf.grid(row=4, column=0, columnspan=2, pady=10)
+        ttk.Button(bf, text="Save", command=save).pack(side="left", padx=5)
+        ttk.Button(bf, text="Cancel", command=win.destroy).pack(side="left", padx=5)
 
     # ---------- Black screen ----------
     def toggle_black(self):
