@@ -15,7 +15,7 @@
 ### 1. Scheduling a Website
 1. Open `Website Launcher.exe` (from `src/dist/Website Launcher`, or from the Start Menu if you used the installer).
 2. **Website URL:** Enter the link you want to open (e.g., `youtube.com`). The app will automatically add `https://` if you forget it.
-3. **Date and Time:** Pick the day, month, year, hour and minute from the dropdowns (24-hour format). They default to 5 minutes from now.
+3. **Date and Time:** Type the day, month, year, hour and minute, or pick them from the dropdowns (24-hour format). They default to 5 minutes from now.
 4. Click **Schedule Launch**. A success popup will appear.
 
 ### 2. Scheduling a Shutdown
@@ -39,7 +39,7 @@
 3. If you used the installer, remove it from Windows **Settings > Installed apps**. Otherwise, delete the `Website Launcher` folder.
 
 ## What changed from V2.0
-- **Date and Time Pickers:** Dropdowns replace typing, so invalid formats can't happen.
+- **Date and Time Fields:** Type the values or pick them from dropdowns, with validation for invalid dates and times.
 - **Edit Tasks:** Change the URL, date or time of an existing task without deleting it.
 - **Delete and Clear:** Delete multiple tasks at once and clear all past tasks in one click.
 - **Built-in Black Screen:** A fullscreen black overlay that can be toggled any time while the audio keeps playing.
