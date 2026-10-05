@@ -34,7 +34,7 @@ class WebSchedulerApp:
         self.refresh_task_list()
 
     def combo(self, parent, var, values, width):
-        return ttk.Combobox(parent, textvariable=var, values=values, width=width, state="readonly")
+        return ttk.Combobox(parent, textvariable=var, values=values, width=width)
 
     def create_widgets(self):
         # ---- Schedule form ----
@@ -107,7 +107,7 @@ class WebSchedulerApp:
             dt = datetime(int(self.year.get()), int(self.month.get()), int(self.day.get()),
                           int(self.hour.get()), int(self.minute.get()))
         except ValueError:
-            messagebox.showwarning("Input Error", "That date doesn't exist. Please check the day and month.")
+            messagebox.showwarning("Input Error", "That date or time isn't valid. Please use numbers only and check the values.")
             return None
         if dt <= datetime.now():
             messagebox.showwarning("Input Error", "The scheduled time must be in the future.")
@@ -245,7 +245,7 @@ class WebSchedulerApp:
                 dt = datetime(int(v["y"].get()), int(v["m"].get()), int(v["d"].get()),
                               int(v["h"].get()), int(v["min"].get()))
             except ValueError:
-                messagebox.showwarning("Input Error", "That date doesn't exist.", parent=win)
+                messagebox.showwarning("Input Error", "That date or time isn't valid. Please use numbers only and check the values.", parent=win)
                 return
             if dt <= datetime.now():
                 messagebox.showwarning("Input Error", "The time must be in the future.", parent=win)
