@@ -2,7 +2,7 @@
 
 AppId={{8F3A6C2E-4B71-4D9A-9E15-27C0B5D1A834}
 AppName=Website Launcher
-AppVersion=3.0
+AppVersion=3.1
 AppPublisher=Keshi
 DefaultDirName={autopf}\Website Launcher
 DefaultGroupName=Website Launcher
