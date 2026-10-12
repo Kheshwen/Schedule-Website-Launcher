@@ -1,5 +1,7 @@
 import subprocess
 import csv
+import ctypes
+from ctypes import wintypes
 from io import StringIO
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
@@ -17,21 +19,117 @@ PS_LIST = (
     "[pscustomobject]@{Name=$_.TaskName; Next=$n; Args=$_.Actions[0].Arguments} } | ConvertTo-Csv -NoTypeInformation"
 )
 
+# Laptop screen brightness (WMI)
+WMI_GET = "(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness | Select-Object -First 1).CurrentBrightness"
+WMI_SET = (
+    "Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods | "
+    "ForEach-Object { Invoke-CimMethod -InputObject $_ -MethodName WmiSetBrightness -Arguments @{Timeout=1; Brightness=%d} }"
+)
+
 
 def run(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, errors="ignore", creationflags=NOWIN)
+
+
+class PHYSICAL_MONITOR(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [("handle", ctypes.c_void_p), ("desc", wintypes.WCHAR * 128)]
+
+
+class Dimmer:
+    """Lowers the real screen brightness: DDC/CI for external monitors, WMI for laptop screens."""
+
+    def __init__(self):
+        self.mode = None
+        self.saved = None
+        self.monitors = None
+
+    def _dxva2(self):
+        d = ctypes.windll.dxva2
+        dw = wintypes.DWORD
+        d.GetNumberOfPhysicalMonitorsFromHMONITOR.argtypes = [ctypes.c_void_p, ctypes.POINTER(dw)]
+        d.GetPhysicalMonitorsFromHMONITOR.argtypes = [ctypes.c_void_p, dw, ctypes.POINTER(PHYSICAL_MONITOR)]
+        d.GetMonitorBrightness.argtypes = [ctypes.c_void_p, ctypes.POINTER(dw), ctypes.POINTER(dw), ctypes.POINTER(dw)]
+        d.SetMonitorBrightness.argtypes = [ctypes.c_void_p, dw]
+        d.DestroyPhysicalMonitors.argtypes = [dw, ctypes.POINTER(PHYSICAL_MONITOR)]
+        return d
+
+    def dim(self):
+        if self.mode:
+            return
+        if not self._dim_ddc():
+            self._dim_wmi()
+
+    def _dim_ddc(self):
+        try:
+            u, d = ctypes.windll.user32, self._dxva2()
+            u.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+            u.MonitorFromPoint.restype = ctypes.c_void_p
+            hmon = u.MonitorFromPoint(wintypes.POINT(0, 0), 1)  # primary monitor (the one the overlay covers)
+            n = wintypes.DWORD()
+            if not d.GetNumberOfPhysicalMonitorsFromHMONITOR(hmon, ctypes.byref(n)) or n.value == 0:
+                return False
+            arr = (PHYSICAL_MONITOR * n.value)()
+            if not d.GetPhysicalMonitorsFromHMONITOR(hmon, n.value, arr):
+                return False
+            saved = []
+            for m in arr:
+                lo, cur, hi = wintypes.DWORD(), wintypes.DWORD(), wintypes.DWORD()
+                if d.GetMonitorBrightness(m.handle, ctypes.byref(lo), ctypes.byref(cur), ctypes.byref(hi)):
+                    d.SetMonitorBrightness(m.handle, lo.value)
+                    saved.append((m.handle, cur.value))
+            if saved:
+                self.mode, self.saved, self.monitors = "ddc", saved, arr
+                return True
+            d.DestroyPhysicalMonitors(n.value, arr)
+        except Exception:
+            pass
+        return False
+
+    def _dim_wmi(self):
+        try:
+            current = int(run(["powershell", "-NoProfile", "-Command", WMI_GET]).stdout.strip())
+            if run(["powershell", "-NoProfile", "-Command", WMI_SET % 0]).returncode != 0:
+                return False
+            self.mode, self.saved = "wmi", current
+            return True
+        except Exception:
+            return False
+
+    def restore(self):
+        mode, self.mode = self.mode, None
+        try:
+            if mode == "ddc":
+                d = self._dxva2()
+                for handle, level in self.saved:
+                    d.SetMonitorBrightness(handle, level)
+                d.DestroyPhysicalMonitors(len(self.monitors), self.monitors)
+            elif mode == "wmi":
+                run(["powershell", "-NoProfile", "-Command", WMI_SET % self.saved])
+        except Exception:
+            pass
 
 
 class WebSchedulerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Schedule Website Launcher V3.0")
-        self.root.geometry("640x580")
-        self.root.resizable(False, False)
+        self.root.geometry("720x620")
+        self.root.minsize(640, 560)
         self.black = None
+        self.dimmer = Dimmer()
+        self.args = {}
+        self.rows = []
+        self.sort_col = "Next"
+        self.sort_rev = False
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.create_widgets()
         self.refresh_task_list()
+
+    def on_close(self):
+        self.close_black()  # makes sure brightness is restored
+        self.root.destroy()
 
     def combo(self, parent, var, values, width):
         return ttk.Combobox(parent, textvariable=var, values=values, width=width)
@@ -79,16 +177,19 @@ class WebSchedulerApp:
         b.pack(fill="x", padx=10, pady=(0, 10))
         self.black_btn = ttk.Button(b, text="Turn On Black Screen", command=self.toggle_black)
         self.black_btn.pack(side="left")
-        ttk.Label(b, text="Press Esc or double-click to turn it off.").pack(side="left", padx=10)
+        self.dim_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(b, text="Also lower brightness", variable=self.dim_var).pack(side="left", padx=10)
+        ttk.Label(b, text="Esc or double-click to exit.").pack(side="left")
 
         # ---- Task list ----
-        lf = ttk.LabelFrame(self.root, text="Scheduled Tasks", padding=10)
+        lf = ttk.LabelFrame(self.root, text="Scheduled Tasks (click a heading to sort)", padding=10)
         lf.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
         self.tree = ttk.Treeview(lf, columns=("Task", "Next", "Status"), show="headings", height=8, selectmode="extended")
-        for col, text, w in (("Task", "Task Name", 270), ("Next", "Next Run Time", 140), ("Status", "Status", 80)):
-            self.tree.heading(col, text=text)
-            self.tree.column(col, width=w)
+        self.headings = {"Task": "Task / URL", "Next": "Next Run Time", "Status": "Status"}
+        for col, w in (("Task", 300), ("Next", 140), ("Status", 80)):
+            self.tree.heading(col, text=self.headings[col], command=lambda c=col: self.sort_by(c))
+            self.tree.column(col, width=w, minwidth=80, stretch=(col == "Task"))
         self.tree.pack(side="left", fill="both", expand=True)
         sb = ttk.Scrollbar(lf, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
@@ -160,18 +261,41 @@ class WebSchedulerApp:
 
     # ---------- Task list ----------
     def refresh_task_list(self):
-        self.tree.delete(*self.tree.get_children())
-        self.args = {}
+        self.args, self.rows = {}, []
         try:
             result = run(["powershell", "-NoProfile", "-Command", PS_LIST])
+            if result.returncode == 0 and result.stdout.strip():
+                for row in csv.DictReader(StringIO(result.stdout)):
+                    name, nxt = row.get("Name", ""), row.get("Next", "")
+                    args = (row.get("Args") or "").strip()
+                    self.args[name] = args
+                    shown = "Shutdown PC" if "SHUTDOWN" in name else (args.strip('"') or name)
+                    self.rows.append((name, shown, nxt, "Pending" if nxt else "Done"))
         except Exception:
-            return
-        if result.returncode != 0 or not result.stdout.strip():
-            return
-        for row in csv.DictReader(StringIO(result.stdout)):
-            name, nxt = row.get("Name", ""), row.get("Next", "")
-            self.args[name] = row.get("Args", "")
-            self.tree.insert("", "end", iid=name, values=(name, nxt or "-", "Pending" if nxt else "Done"))
+            pass
+        self.render_tasks()
+
+    def sort_key(self, row):
+        name, shown, nxt, status = row
+        if self.sort_col == "Next":
+            try:
+                return datetime.strptime(nxt, "%d/%m/%Y %H:%M")
+            except ValueError:
+                return datetime.max  # finished tasks go last
+        return (shown if self.sort_col == "Task" else status).lower()
+
+    def sort_by(self, col):
+        self.sort_rev = not self.sort_rev if col == self.sort_col else False
+        self.sort_col = col
+        self.render_tasks()
+
+    def render_tasks(self):
+        self.tree.delete(*self.tree.get_children())
+        for name, shown, nxt, status in sorted(self.rows, key=self.sort_key, reverse=self.sort_rev):
+            self.tree.insert("", "end", iid=name, values=(shown, nxt or "-", status))
+        for col, text in self.headings.items():
+            arrow = (" ▼" if self.sort_rev else " ▲") if col == self.sort_col else ""
+            self.tree.heading(col, text=text + arrow)
 
     def delete_tasks(self, names):
         failed = [n for n in names if run(["schtasks", "/delete", "/tn", n, "/f"]).returncode != 0]
@@ -203,8 +327,9 @@ class WebSchedulerApp:
             return
         name = sel[0]
         is_shutdown = "SHUTDOWN" in name
+        values = self.tree.item(name, "values")
         try:
-            d = datetime.strptime(self.tree.item(name, "values")[1], "%d/%m/%Y %H:%M")
+            d = datetime.strptime(values[1], "%d/%m/%Y %H:%M")
         except ValueError:  # past task has no next run time
             d = datetime.now() + timedelta(minutes=5)
 
@@ -213,7 +338,7 @@ class WebSchedulerApp:
         win.resizable(False, False)
         win.transient(self.root)
         win.grab_set()
-        ttk.Label(win, text=name).grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 5))
+        ttk.Label(win, text=values[0]).grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 5))
 
         url_var = tk.StringVar(value=self.args.get(name, "").strip().strip('"'))
         if not is_shutdown:
@@ -286,11 +411,18 @@ class WebSchedulerApp:
         w.focus_force()
         self.black = w
         self.black_btn.config(text="Turn Off Black Screen")
+        if self.dim_var.get():
+            self.root.after(150, self.apply_dim)  # after the overlay is on screen
+
+    def apply_dim(self):
+        if self.black:  # skip if it was already closed
+            self.dimmer.dim()
 
     def close_black(self):
         if self.black:
             self.black.destroy()
             self.black = None
+        self.dimmer.restore()
         self.black_btn.config(text="Turn On Black Screen")
 
 
