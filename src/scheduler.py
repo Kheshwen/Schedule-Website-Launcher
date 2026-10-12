@@ -1,3 +1,6 @@
+import os
+import re
+import json
 import subprocess
 import csv
 import ctypes
@@ -10,6 +13,9 @@ from tkinter import ttk, messagebox
 
 TASK_PREFIX = "AutoWeb_"
 NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # stops console flashing in the .exe
+DT_FMT = "%d/%m/%Y %H:%M"
+AUTO_REFRESH_MS = 15000
+SETTINGS_FILE = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "WebsiteLauncher", "settings.json")
 
 # Filters by name inside PowerShell, so it only fetches our tasks (much faster)
 PS_LIST = (
@@ -29,6 +35,24 @@ WMI_SET = (
 
 def run(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, errors="ignore", creationflags=NOWIN)
+
+
+def load_settings():
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_settings(data):
+    try:
+        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
 
 
 class PHYSICAL_MONITOR(ctypes.Structure):
@@ -113,35 +137,82 @@ class Dimmer:
 class WebSchedulerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Schedule Website Launcher V3.0")
-        self.root.geometry("720x620")
+        self.root.title("Schedule Website Launcher V3.1")
+        self.settings = load_settings()
         self.root.minsize(640, 560)
+        self.apply_saved_geometry()
+
         self.black = None
         self.dimmer = Dimmer()
         self.args = {}
         self.rows = []
-        self.sort_col = "Next"
-        self.sort_rev = False
+        self.overdue_tries = {}
+        self.status_job = None
+        col = self.settings.get("sort_col")
+        self.sort_col = col if col in ("Task", "Next", "Status") else "Next"
+        self.sort_rev = bool(self.settings.get("sort_rev", False))
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.create_widgets()
         self.refresh_task_list()
+        self.root.after(AUTO_REFRESH_MS, self.auto_refresh)
+
+    # ---------- Settings / window ----------
+    def apply_saved_geometry(self):
+        self.root.geometry("720x620")
+        m = re.fullmatch(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", str(self.settings.get("geometry", "")))
+        if m:
+            w, h = max(int(m.group(1)), 640), max(int(m.group(2)), 560)
+            x, y = int(m.group(3)), int(m.group(4))
+            sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+            if -w + 100 < x < sw - 100 and 0 <= y < sh - 100:  # skip the position if it would be off-screen
+                self.root.geometry(f"{w}x{h}+{x}+{y}")
+            else:
+                self.root.geometry(f"{w}x{h}")
+        if self.settings.get("zoomed"):
+            self.root.state("zoomed")
 
     def on_close(self):
         self.close_black()  # makes sure brightness is restored
+        try:
+            state = self.root.state()
+            if state != "normal":  # read the normal size, not the maximized one
+                self.root.state("normal")
+                self.root.update_idletasks()
+            save_settings({
+                "geometry": self.root.geometry(),
+                "zoomed": state == "zoomed",
+                "sort_col": self.sort_col,
+                "sort_rev": self.sort_rev,
+                "dim": self.dim_var.get(),
+            })
+        except Exception:
+            pass
         self.root.destroy()
+
+    def set_status(self, message):
+        self.status_var.set(message)
+        if self.status_job:
+            self.root.after_cancel(self.status_job)
+        self.status_job = self.root.after(6000, lambda: self.status_var.set(""))
 
     def combo(self, parent, var, values, width):
         return ttk.Combobox(parent, textvariable=var, values=values, width=width)
 
     def create_widgets(self):
+        # ---- Status bar (packed first so it stays at the bottom) ----
+        self.status_var = tk.StringVar()
+        ttk.Label(self.root, textvariable=self.status_var, anchor="w", relief="sunken",
+                  padding=(8, 3)).pack(side="bottom", fill="x")
+
         # ---- Schedule form ----
         f = ttk.LabelFrame(self.root, text="Schedule", padding=10)
         f.pack(fill="x", padx=10, pady=10)
 
         ttk.Label(f, text="Website URL:").grid(row=0, column=0, sticky="w", pady=5)
         self.url_var = tk.StringVar()
-        ttk.Entry(f, textvariable=self.url_var, width=55).grid(row=0, column=1, columnspan=2, sticky="w", padx=5)
+        self.url_entry = ttk.Entry(f, textvariable=self.url_var, width=55)
+        self.url_entry.grid(row=0, column=1, columnspan=2, sticky="w", padx=5)
 
         d = datetime.now() + timedelta(minutes=5)
         self.day = tk.StringVar(value=f"{d.day:02d}")
@@ -166,6 +237,12 @@ class WebSchedulerApp:
         ttk.Label(time_row, text=":").pack(side="left")
         self.combo(time_row, self.minute, [f"{i:02d}" for i in range(60)], 4).pack(side="left")
 
+        # Enter in any of the input boxes schedules the launch
+        enter_widgets = [self.url_entry] + [c for row in (date_row, time_row)
+                                            for c in row.winfo_children() if isinstance(c, ttk.Combobox)]
+        for w in enter_widgets:
+            w.bind("<Return>", lambda e: self.schedule_launch())
+
         btns = ttk.Frame(f)
         btns.grid(row=3, column=0, columnspan=3, pady=(10, 0))
         ttk.Button(btns, text="Schedule Launch", command=self.schedule_launch).pack(side="left", padx=5)
@@ -177,12 +254,12 @@ class WebSchedulerApp:
         b.pack(fill="x", padx=10, pady=(0, 10))
         self.black_btn = ttk.Button(b, text="Turn On Black Screen", command=self.toggle_black)
         self.black_btn.pack(side="left")
-        self.dim_var = tk.BooleanVar(value=True)
+        self.dim_var = tk.BooleanVar(value=bool(self.settings.get("dim", True)))
         ttk.Checkbutton(b, text="Also lower brightness", variable=self.dim_var).pack(side="left", padx=10)
         ttk.Label(b, text="Esc or double-click to exit.").pack(side="left")
 
         # ---- Task list ----
-        lf = ttk.LabelFrame(self.root, text="Scheduled Tasks (click a heading to sort)", padding=10)
+        lf = ttk.LabelFrame(self.root, text="Scheduled Tasks (click a heading to sort, double-click a task to edit)", padding=10)
         lf.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
         self.tree = ttk.Treeview(lf, columns=("Task", "Next", "Status"), show="headings", height=8, selectmode="extended")
@@ -194,6 +271,8 @@ class WebSchedulerApp:
         sb = ttk.Scrollbar(lf, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
+        self.tree.bind("<Double-1>", self.on_double_click)
+        self.tree.bind("<Delete>", lambda e: self.delete_selected())
 
         bf = ttk.Frame(self.root)
         bf.pack(fill="x", padx=10, pady=(0, 10))
@@ -240,7 +319,7 @@ class WebSchedulerApp:
         domain = urlparse(url).netloc.replace(".", "_") or "WebLaunch"
         name = f"{TASK_PREFIX}{domain}_{datetime.now():%H%M%S}"
         if self.create_task(name, f'explorer.exe "{url}"', dt):
-            messagebox.showinfo("Success", f"Scheduled '{url}' for {dt:%d/%m/%Y %H:%M}.")
+            self.set_status(f"Scheduled {url} for {dt:%d/%m/%Y %H:%M}.")
             self.url_var.set("")
 
     def schedule_shutdown(self):
@@ -250,14 +329,14 @@ class WebSchedulerApp:
         name = f"{TASK_PREFIX}SHUTDOWN_{datetime.now():%H%M%S}"
         # 60-second countdown after it triggers, so you have time to abort
         if self.create_task(name, "shutdown.exe /s /t 60", dt):
-            messagebox.showinfo("Success", f"PC will start shutting down at {dt:%d/%m/%Y %H:%M} (60 sec countdown).")
+            self.set_status(f"PC will start shutting down at {dt:%d/%m/%Y %H:%M} (60 sec countdown).")
 
     def abort_shutdown(self):
         result = run(["shutdown", "/a"])
         if result.returncode == 0:
-            messagebox.showinfo("Aborted", "Shutdown countdown cancelled.")
+            self.set_status("Shutdown countdown cancelled.")
         else:
-            messagebox.showinfo("Nothing to abort", "No shutdown countdown is running right now.")
+            self.set_status("No shutdown countdown is running right now.")
 
     # ---------- Task list ----------
     def refresh_task_list(self):
@@ -275,11 +354,30 @@ class WebSchedulerApp:
             pass
         self.render_tasks()
 
+    def auto_refresh(self):
+        """Refreshes only when a Pending task's time has passed, so it doesn't run PowerShell for nothing."""
+        now = datetime.now()
+        due = []
+        for name, shown, nxt, status in self.rows:
+            if status == "Pending":
+                try:
+                    if datetime.strptime(nxt, DT_FMT) <= now:
+                        due.append((name, nxt))
+                except ValueError:
+                    pass
+        # a few tries, because Windows can take a few seconds to update a task after it runs
+        fresh = [k for k in due if self.overdue_tries.get(k, 0) < 4]
+        if fresh:
+            for k in fresh:
+                self.overdue_tries[k] = self.overdue_tries.get(k, 0) + 1
+            self.refresh_task_list()
+        self.root.after(AUTO_REFRESH_MS, self.auto_refresh)
+
     def sort_key(self, row):
         name, shown, nxt, status = row
         if self.sort_col == "Next":
             try:
-                return datetime.strptime(nxt, "%d/%m/%Y %H:%M")
+                return datetime.strptime(nxt, DT_FMT)
             except ValueError:
                 return datetime.max  # finished tasks go last
         return (shown if self.sort_col == "Task" else status).lower()
@@ -290,23 +388,33 @@ class WebSchedulerApp:
         self.render_tasks()
 
     def render_tasks(self):
+        selected = set(self.tree.selection())
         self.tree.delete(*self.tree.get_children())
         for name, shown, nxt, status in sorted(self.rows, key=self.sort_key, reverse=self.sort_rev):
             self.tree.insert("", "end", iid=name, values=(shown, nxt or "-", status))
+        keep = [i for i in selected if self.tree.exists(i)]
+        if keep:
+            self.tree.selection_set(keep)
         for col, text in self.headings.items():
             arrow = (" ▼" if self.sort_rev else " ▲") if col == self.sort_col else ""
             self.tree.heading(col, text=text + arrow)
+
+    def on_double_click(self, event):
+        if self.tree.identify_region(event.x, event.y) == "cell":
+            self.edit_selected()
 
     def delete_tasks(self, names):
         failed = [n for n in names if run(["schtasks", "/delete", "/tn", n, "/f"]).returncode != 0]
         self.refresh_task_list()
         if failed:
             messagebox.showerror("Error", "Failed to delete:\n" + "\n".join(failed))
+        else:
+            self.set_status(f"Deleted {len(names)} task(s).")
 
     def delete_selected(self):
         names = list(self.tree.selection())
         if not names:
-            messagebox.showinfo("Selection Required", "Please select a task from the list.")
+            self.set_status("Select a task from the list first.")
             return
         if messagebox.askyesno("Confirm Deletion", f"Delete {len(names)} selected task(s)?"):
             self.delete_tasks(names)
@@ -314,7 +422,7 @@ class WebSchedulerApp:
     def clear_past(self):
         names = [i for i in self.tree.get_children() if self.tree.item(i, "values")[2] == "Done"]
         if not names:
-            messagebox.showinfo("Nothing to clear", "There are no past tasks.")
+            self.set_status("There are no past tasks to clear.")
             return
         if messagebox.askyesno("Clear Past Tasks", f"Delete {len(names)} finished task(s)?"):
             self.delete_tasks(names)
@@ -323,13 +431,13 @@ class WebSchedulerApp:
     def edit_selected(self):
         sel = self.tree.selection()
         if len(sel) != 1:
-            messagebox.showinfo("Selection Required", "Please select one task to edit.")
+            self.set_status("Select one task to edit.")
             return
         name = sel[0]
         is_shutdown = "SHUTDOWN" in name
         values = self.tree.item(name, "values")
         try:
-            d = datetime.strptime(values[1], "%d/%m/%Y %H:%M")
+            d = datetime.strptime(values[1], DT_FMT)
         except ValueError:  # past task has no next run time
             d = datetime.now() + timedelta(minutes=5)
 
@@ -388,6 +496,7 @@ class WebSchedulerApp:
             if result.returncode == 0:
                 win.destroy()
                 self.refresh_task_list()
+                self.set_status("Task updated.")
             else:
                 messagebox.showerror("System Error", f"Could not update task.\n\n{result.stderr}", parent=win)
 
