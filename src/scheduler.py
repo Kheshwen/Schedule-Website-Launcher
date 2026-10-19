@@ -48,8 +48,7 @@ WMI_SET = (
 DEVICE = "device"
 SPECIAL = {DEVICE: "Device time (default)", "UTC": "UTC"}
 
-# One entry per region people actually use: (IANA name, label). Offsets are added live for the chosen date.
-# (IANA name, label, fallback standard UTC offset in hours if tzdata is not installed)
+# One entry per region people actually use: (IANA name, label, fallback UTC offset).
 ZONES = [
     ("Pacific/Honolulu", "Hawaii · Honolulu", -10),
     ("America/Anchorage", "Alaska · Anchorage", -9),
@@ -284,7 +283,6 @@ class Dimmer:
     def _dim_ddc(self):
         try:
             u, d = ctypes.windll.user32, self._dxva2()
-            # Use MonitorFromWindow with NULL (0) and MONITOR_DEFAULTTOPRIMARY (1) to avoid 64-bit POINT struct ABI issues
             u.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
             u.MonitorFromWindow.restype = ctypes.c_void_p
             hmon = u.MonitorFromWindow(0, 1)  # primary monitor
@@ -375,14 +373,12 @@ class WebSchedulerApp:
         self.last_good_tz = self.tz_key
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.apply_theme()  # first, so the theme's button styles exist before the widgets are built
+        self.apply_theme()
         self.create_widgets()
         self.apply_theme()
         self.refresh_tz_widget(self.ref_datetime())
         self.update_form_info()
         self.refresh_task_list()
-        if len(self.zone_names) <= len(SPECIAL):
-            self.set_status("Time zone data is missing (pip install tzdata), so only device time and UTC are available.")
         self.root.after(AUTO_REFRESH_MS, self.auto_refresh)
 
     # ---------- Settings / window ----------
@@ -391,13 +387,12 @@ class WebSchedulerApp:
 
     def apply_saved_geometry(self):
         self.root.geometry(f"{self.px(760)}x{self.px(700)}")
-        # Sizes saved by older versions were not scaled for high-resolution screens, so they are skipped
         m = re.fullmatch(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", str(self.settings.get("geometry", "")))
         if m and self.settings.get("dpi") == 1:
             w, h = max(int(m.group(1)), self.px(680)), max(int(m.group(2)), self.px(620))
             x, y = int(m.group(3)), int(m.group(4))
             sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-            if -w + 100 < x < sw - 100 and 0 <= y < sh - 100:  # skip the position if it would be off-screen
+            if -w + 100 < x < sw - 100 and 0 <= y < sh - 100:
                 self.root.geometry(f"{w}x{h}+{x}+{y}")
             else:
                 self.root.geometry(f"{w}x{h}")
@@ -405,10 +400,10 @@ class WebSchedulerApp:
                 self.root.state("zoomed")
 
     def on_close(self):
-        self.close_black()  # makes sure brightness is restored
+        self.close_black()
         try:
             state = self.root.state()
-            if state != "normal":  # read the normal size, not the maximized one
+            if state != "normal":
                 self.root.state("normal")
                 self.root.update_idletasks()
             save_settings({
@@ -463,7 +458,6 @@ class WebSchedulerApp:
         self.theme_combo.selection_clear()
 
     def set_titlebar(self, win):
-        """Makes the Windows title bar dark to match the theme."""
         try:
             win.update_idletasks()
             user32, dwm = ctypes.windll.user32, ctypes.windll.dwmapi
@@ -472,14 +466,13 @@ class WebSchedulerApp:
             dwm.DwmSetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
             hwnd = user32.GetParent(win.winfo_id())
             value = ctypes.c_int(1 if self.mode == "dark" else 0)
-            for attribute in (20, 19):  # 20 on current Windows 10/11, 19 on older builds
+            for attribute in (20, 19):
                 if dwm.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value)) == 0:
                     break
         except Exception:
             pass
 
     def style_combo_popups(self):
-        """The theme doesn't colour the dropdown lists, so they are coloured by hand."""
         pal = PALETTE[self.mode]
         alive = []
         for cb in self.combos:
@@ -508,19 +501,18 @@ class WebSchedulerApp:
 
     # ---------- Time zone helpers ----------
     def zone(self, key):
-            if key == DEVICE:
-                return None
-            if key not in self._zones:
-                if key == "UTC":
-                    self._zones[key] = timezone.utc
-                else:
-                    try:
-                        self._zones[key] = ZoneInfo(key)
-                    except Exception:
-                        # Fallback to fixed offset if tzdata is not installed
-                        off = next(h for k, _, h in ZONES if k == key)
-                        self._zones[key] = timezone(timedelta(hours=off))
-            return self._zones[key]
+        if key == DEVICE:
+            return None
+        if key not in self._zones:
+            if key == "UTC":
+                self._zones[key] = timezone.utc
+            else:
+                try:
+                    self._zones[key] = ZoneInfo(key)
+                except Exception:
+                    off = next(h for k, _, h in ZONES if k == key)
+                    self._zones[key] = timezone(timedelta(hours=off))
+        return self._zones[key]
 
     def available_zone_names(self):
         names = dict(SPECIAL)
@@ -533,7 +525,6 @@ class WebSchedulerApp:
         return names
 
     def tz_entries(self, ref):
-        """[(label, key)] with the offset on the chosen date, sorted west to east."""
         rows = []
         for key, name, *_ in ZONES:
             if key in self.zone_names:
@@ -568,14 +559,27 @@ class WebSchedulerApp:
         if key is None:
             return "Choose a time zone from the list."
         if key == DEVICE:
-            return ""
-        tz = self.zone(key)
-        issue = zone_issue(dt, tz)
-        if issue == "gap":
-            return "That time doesn't exist in this time zone because the clocks change. Pick another time."
-        local = dt.replace(tzinfo=tz).astimezone().replace(tzinfo=None)
-        note = "  (this time happens twice, the first one is used)" if issue == "ambiguous" else ""
-        return f"Runs at {local:%a %d/%m/%Y %H:%M} your device time{note}"
+            local, note = dt, ""
+        else:
+            tz = self.zone(key)
+            issue = zone_issue(dt, tz)
+            if issue == "gap":
+                return "That time doesn't exist in this time zone because the clocks change. Pick another time."
+            local = dt.replace(tzinfo=tz).astimezone().replace(tzinfo=None)
+            note = "  (this time happens twice, the first one is used)" if issue == "ambiguous" else ""
+
+        diff = int((local - datetime.now()).total_seconds() // 60)
+        if diff <= 0:
+            rel = "in the past"
+        else:
+            d, rem = divmod(diff, 1440)
+            h, m = divmod(rem, 60)
+            parts = ([f"{d}d"] if d else []) + ([f"{h}h"] if h else []) + ([f"{m}m"] if m or not (d or h) else [])
+            rel = "in " + " ".join(parts)
+
+        if key == DEVICE:
+            return f"Scheduled {rel}"
+        return f"Runs at {local:%a %d/%m/%Y %H:%M} your device time ({rel}){note}"
 
     def update_form_info(self, *_):
         dt = self.entered_datetime()
@@ -585,7 +589,7 @@ class WebSchedulerApp:
             return
         self.day_var.set(dt.strftime("%a"))
         if not self.tz_editing:
-            self.refresh_tz_widget(dt)  # offsets can change with the date (daylight saving)
+            self.refresh_tz_widget(dt)
         self.preview_var.set(self.preview_text(dt))
 
     def tz_focus_in(self, event=None):
@@ -602,7 +606,7 @@ class WebSchedulerApp:
         self.tz_key = resolve_zone(self.tz_var.get(), self.zone_names)
         entries = self.tz_entries(self.ref_datetime())
         shown = [label for label, key in entries if not text or text in label.lower() or ALIASES.get(text) == key]
-        self.tz_combo["values"] = shown or [label for label, _ in entries]  # the dropdown narrows as you type
+        self.tz_combo["values"] = shown or [label for label, _ in entries]
         dt = self.entered_datetime()
         self.preview_var.set(self.preview_text(dt) if dt else "")
 
@@ -627,12 +631,20 @@ class WebSchedulerApp:
         self.commit_tz()
         self.schedule_launch()
 
+    def shift_time(self, **delta_kwargs):
+        base = max(self.entered_datetime() or datetime.now(), datetime.now())
+        target = base + timedelta(**delta_kwargs)
+        self.day.set(f"{target.day:02d}")
+        self.month.set(f"{target.month:02d}")
+        self.year.set(str(target.year))
+        self.hour.set(f"{target.hour:02d}")
+        self.minute.set(f"{target.minute:02d}")
+
     # ---------- Layout ----------
     def create_widgets(self):
         accent = {"style": "Accent.TButton"} if sv_ttk else {}
         switch = {"style": "Switch.TCheckbutton"} if sv_ttk else {}
 
-        # ---- Bottom bar (packed first so it stays at the bottom) ----
         bar = ttk.Frame(self.root)
         bar.pack(side="bottom", fill="x", padx=14, pady=(0, 8))
         self.status_var = tk.StringVar()
@@ -644,7 +656,6 @@ class WebSchedulerApp:
             ttk.Label(bar, text="Theme:").pack(side="right", padx=(0, 6))
             self.theme_combo.bind("<<ComboboxSelected>>", self.on_theme_change)
 
-        # ---- Schedule form ----
         f = ttk.LabelFrame(self.root, text="Schedule", padding=12)
         f.pack(fill="x", padx=14, pady=(14, 10))
 
@@ -678,6 +689,8 @@ class WebSchedulerApp:
         self.combo(time_row, self.hour, [f"{i:02d}" for i in range(24)], 4).pack(side="left")
         ttk.Label(time_row, text=":").pack(side="left", padx=2)
         self.combo(time_row, self.minute, [f"{i:02d}" for i in range(60)], 4).pack(side="left")
+        for label, kw in (("+15m", {"minutes": 15}), ("+1h", {"hours": 1}), ("+1d", {"days": 1})):
+            ttk.Button(time_row, text=label, width=5, command=lambda k=kw: self.shift_time(**k)).pack(side="left", padx=(6, 0))
 
         ttk.Label(f, text="Time zone:").grid(row=3, column=0, sticky="w", pady=6)
         self.tz_combo = self.combo(f, self.tz_var, [], 46)
@@ -691,7 +704,6 @@ class WebSchedulerApp:
         self.preview_label = ttk.Label(f, textvariable=self.preview_var)
         self.preview_label.grid(row=4, column=1, columnspan=2, sticky="w", padx=6)
 
-        # Enter in the URL, date or time boxes schedules the launch
         for w in [self.url_entry] + [
             c for row in (date_row, time_row)
             for c in row.winfo_children() if isinstance(c, ttk.Combobox)
@@ -707,7 +719,6 @@ class WebSchedulerApp:
         ttk.Button(btns, text="Schedule Shutdown", command=self.schedule_shutdown).pack(side="left", padx=5)
         ttk.Button(btns, text="Abort Shutdown Countdown", command=self.abort_shutdown).pack(side="left", padx=5)
 
-        # ---- Black screen ----
         b = ttk.LabelFrame(self.root, text="Black Screen (audio keeps playing)", padding=12)
         b.pack(fill="x", padx=14, pady=(0, 10))
         self.black_btn = ttk.Button(b, text="Turn On Black Screen", command=self.toggle_black)
@@ -716,7 +727,6 @@ class WebSchedulerApp:
         ttk.Checkbutton(b, text="Also lower brightness", variable=self.dim_var, **switch).pack(side="left", padx=14)
         ttk.Label(b, text="Esc or double-click to exit.").pack(side="left")
 
-        # ---- Task list ----
         lf = ttk.LabelFrame(
             self.root,
             text="Scheduled Tasks (click a heading to sort, double-click a task to edit)",
@@ -742,6 +752,15 @@ class WebSchedulerApp:
         self.tree.bind("<Double-1>", self.on_double_click)
         self.tree.bind("<Delete>", lambda e: self.delete_selected())
 
+        # Context menu
+        self.menu = tk.Menu(self.root, tearoff=0)
+        self.menu.add_command(label="Open URL Now", command=self.open_selected_now)
+        self.menu.add_command(label="Copy URL", command=self.copy_selected_url)
+        self.menu.add_separator()
+        self.menu.add_command(label="Edit", command=self.edit_selected)
+        self.menu.add_command(label="Delete", command=self.delete_selected)
+        self.tree.bind("<Button-3>", self.show_context_menu)
+
         bf = ttk.Frame(self.root)
         bf.pack(fill="x", padx=14, pady=(0, 10))
         ttk.Button(bf, text="Refresh", command=self.refresh_task_list).pack(side="left", padx=5)
@@ -749,9 +768,30 @@ class WebSchedulerApp:
         ttk.Button(bf, text="Edit Selected", command=self.edit_selected).pack(side="left", padx=5)
         ttk.Button(bf, text="Delete Selected", command=self.delete_selected).pack(side="right", padx=5)
 
+    def show_context_menu(self, event):
+        iid = self.tree.identify_row(event.y)
+        if iid:
+            if iid not in self.tree.selection():
+                self.tree.selection_set(iid)
+            self.menu.tk_popup(event.x_root, event.y_root)
+
+    def open_selected_now(self):
+        for name in self.tree.selection():
+            url = self.args.get(name, "").strip().strip('"')
+            if url and "SHUTDOWN" not in name:
+                os.startfile(url)
+
+    def copy_selected_url(self):
+        sel = self.tree.selection()
+        if sel:
+            url = self.args.get(sel[0], "").strip().strip('"')
+            if url:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(url)
+                self.set_status("Copied URL to clipboard.")
+
     # ---------- Inputs ----------
     def get_datetime(self):
-        """The entered time converted to device time, or None if something is wrong."""
         dt = self.entered_datetime()
         if dt is None:
             messagebox.showwarning("Input Error", "That date or time isn't valid. Please use numbers only and check the values.")
@@ -783,11 +823,11 @@ class WebSchedulerApp:
         return dt
 
     def register_task(self, name, exe, arg, dt):
-        """Creates or updates a Windows Scheduled Task via PowerShell (avoids schtasks locale & quote bugs)."""
         ps_script = (
             f"$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '{arg.replace(chr(39), chr(39)*2)}'; "
             f"$t = New-ScheduledTaskTrigger -Once -At '{dt:%Y-%m-%dT%H:%M:00}'; "
-            f"Register-ScheduledTask -TaskName '{name}' -Action $a -Trigger $t -Force | Out-Null"
+            f"$s = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable; "
+            f"Register-ScheduledTask -TaskName '{name}' -Action $a -Trigger $t -Settings $s -Force | Out-Null"
         )
         result = run(["powershell", "-NoProfile", "-Command", ps_script])
         if result.returncode == 0:
@@ -819,7 +859,6 @@ class WebSchedulerApp:
         if not dt:
             return
         name = f"{TASK_PREFIX}SHUTDOWN_{datetime.now():%H%M%S}"
-        # 60-second countdown after it triggers, so you have time to abort
         if self.register_task(name, "shutdown.exe", "/s /t 60", dt):
             self.set_status(f"PC will start shutting down at {dt:%a %d/%m/%Y %H:%M} (60 sec countdown).")
 
@@ -847,7 +886,6 @@ class WebSchedulerApp:
         self.render_tasks()
 
     def auto_refresh(self):
-        """Refreshes only when a Pending task's time has passed, so it doesn't run PowerShell for nothing."""
         now = datetime.now()
         due = []
         for name, shown, nxt, status in self.rows:
@@ -857,7 +895,6 @@ class WebSchedulerApp:
                         due.append((name, nxt))
                 except ValueError:
                     pass
-        # a few tries, because Windows can take a few seconds to update a task after it runs
         fresh = [k for k in due if self.overdue_tries.get(k, 0) < 4]
         if fresh:
             for k in fresh:
@@ -871,7 +908,7 @@ class WebSchedulerApp:
             try:
                 return datetime.strptime(nxt, DT_FMT)
             except ValueError:
-                return datetime.max  # finished tasks go last
+                return datetime.max
         return (shown if self.sort_col == "Task" else status).lower()
 
     def sort_by(self, col):
@@ -903,10 +940,12 @@ class WebSchedulerApp:
             self.edit_selected()
 
     def delete_tasks(self, names):
-        failed = [n for n in names if run(["schtasks", "/delete", "/tn", n, "/f"]).returncode != 0]
+        quoted = ",".join(f"'{n}'" for n in names)
+        ps_cmd = f"Unregister-ScheduledTask -TaskName {quoted} -Confirm:$false"
+        result = run(["powershell", "-NoProfile", "-Command", ps_cmd])
         self.refresh_task_list()
-        if failed:
-            messagebox.showerror("Error", "Failed to delete:\n" + "\n".join(failed))
+        if result.returncode != 0:
+            messagebox.showerror("Error", f"Failed to delete tasks:\n{result.stderr}")
         else:
             self.set_status(f"Deleted {len(names)} task(s).")
 
@@ -937,7 +976,7 @@ class WebSchedulerApp:
         values = self.tree.item(name, "values")
         try:
             d = datetime.strptime(values[2], DT_FMT)
-        except ValueError:  # past task has no next run time
+        except ValueError:
             d = datetime.now() + timedelta(minutes=5)
 
         win = tk.Toplevel(self.root)
@@ -1053,10 +1092,10 @@ class WebSchedulerApp:
         self.black = w
         self.black_btn.config(text="Turn Off Black Screen")
         if self.dim_var.get():
-            self.root.after(150, self.apply_dim)  # after the overlay is on screen
+            self.root.after(150, self.apply_dim)
 
     def apply_dim(self):
-        if self.black:  # skip if it was already closed
+        if self.black:
             self.dimmer.dim()
 
     def close_black(self):
