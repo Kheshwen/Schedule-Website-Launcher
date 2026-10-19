@@ -49,43 +49,44 @@ DEVICE = "device"
 SPECIAL = {DEVICE: "Device time (default)", "UTC": "UTC"}
 
 # One entry per region people actually use: (IANA name, label). Offsets are added live for the chosen date.
+# (IANA name, label, fallback standard UTC offset in hours if tzdata is not installed)
 ZONES = [
-    ("Pacific/Honolulu", "Hawaii · Honolulu"),
-    ("America/Anchorage", "Alaska · Anchorage"),
-    ("America/Los_Angeles", "Pacific Time · Los Angeles"),
-    ("America/Denver", "Mountain Time · Denver"),
-    ("America/Chicago", "Central Time · Chicago"),
-    ("America/New_York", "Eastern Time · New York"),
-    ("America/Halifax", "Atlantic Time · Halifax"),
-    ("America/St_Johns", "Newfoundland · St. John's"),
-    ("America/Sao_Paulo", "Brazil · Sao Paulo"),
-    ("Europe/London", "UK · London"),
-    ("Europe/Berlin", "Central Europe · Berlin"),
-    ("Europe/Athens", "Eastern Europe · Athens"),
-    ("Africa/Cairo", "Egypt · Cairo"),
-    ("Africa/Johannesburg", "South Africa · Johannesburg"),
-    ("Europe/Moscow", "Russia · Moscow"),
-    ("Europe/Istanbul", "Turkey · Istanbul"),
-    ("Asia/Riyadh", "Saudi Arabia · Riyadh"),
-    ("Africa/Nairobi", "East Africa · Nairobi"),
-    ("Asia/Tehran", "Iran · Tehran"),
-    ("Asia/Dubai", "UAE · Dubai"),
-    ("Asia/Karachi", "Pakistan · Karachi"),
-    ("Asia/Kolkata", "India · Kolkata"),
-    ("Asia/Kathmandu", "Nepal · Kathmandu"),
-    ("Asia/Dhaka", "Bangladesh · Dhaka"),
-    ("Asia/Bangkok", "Thailand / Vietnam · Bangkok"),
-    ("Asia/Jakarta", "Indonesia · Jakarta"),
-    ("Asia/Kuala_Lumpur", "Malaysia / Singapore · Kuala Lumpur"),
-    ("Asia/Shanghai", "China · Shanghai"),
-    ("Asia/Hong_Kong", "Hong Kong"),
-    ("Asia/Manila", "Philippines · Manila"),
-    ("Australia/Perth", "Western Australia · Perth"),
-    ("Asia/Tokyo", "Japan · Tokyo"),
-    ("Asia/Seoul", "Korea · Seoul"),
-    ("Australia/Adelaide", "Australia · Adelaide"),
-    ("Australia/Sydney", "Australia · Sydney / Melbourne"),
-    ("Pacific/Auckland", "New Zealand · Auckland"),
+    ("Pacific/Honolulu", "Hawaii · Honolulu", -10),
+    ("America/Anchorage", "Alaska · Anchorage", -9),
+    ("America/Los_Angeles", "Pacific Time · Los Angeles", -8),
+    ("America/Denver", "Mountain Time · Denver", -7),
+    ("America/Chicago", "Central Time · Chicago", -6),
+    ("America/New_York", "Eastern Time · New York", -5),
+    ("America/Halifax", "Atlantic Time · Halifax", -4),
+    ("America/St_Johns", "Newfoundland · St. John's", -3.5),
+    ("America/Sao_Paulo", "Brazil · Sao Paulo", -3),
+    ("Europe/London", "UK · London", 0),
+    ("Europe/Berlin", "Central Europe · Berlin", 1),
+    ("Europe/Athens", "Eastern Europe · Athens", 2),
+    ("Africa/Cairo", "Egypt · Cairo", 2),
+    ("Africa/Johannesburg", "South Africa · Johannesburg", 2),
+    ("Europe/Moscow", "Russia · Moscow", 3),
+    ("Europe/Istanbul", "Turkey · Istanbul", 3),
+    ("Asia/Riyadh", "Saudi Arabia · Riyadh", 3),
+    ("Africa/Nairobi", "East Africa · Nairobi", 3),
+    ("Asia/Tehran", "Iran · Tehran", 3.5),
+    ("Asia/Dubai", "UAE · Dubai", 4),
+    ("Asia/Karachi", "Pakistan · Karachi", 5),
+    ("Asia/Kolkata", "India · Kolkata", 5.5),
+    ("Asia/Kathmandu", "Nepal · Kathmandu", 5.75),
+    ("Asia/Dhaka", "Bangladesh · Dhaka", 6),
+    ("Asia/Bangkok", "Thailand / Vietnam · Bangkok", 7),
+    ("Asia/Jakarta", "Indonesia · Jakarta", 7),
+    ("Asia/Kuala_Lumpur", "Malaysia / Singapore · Kuala Lumpur", 8),
+    ("Asia/Shanghai", "China · Shanghai", 8),
+    ("Asia/Hong_Kong", "Hong Kong", 8),
+    ("Asia/Manila", "Philippines · Manila", 8),
+    ("Australia/Perth", "Western Australia · Perth", 8),
+    ("Asia/Tokyo", "Japan · Tokyo", 9),
+    ("Asia/Seoul", "Korea · Seoul", 9),
+    ("Australia/Adelaide", "Australia · Adelaide", 9.5),
+    ("Australia/Sydney", "Australia · Sydney / Melbourne", 10),
+    ("Pacific/Auckland", "New Zealand · Auckland", 12),
 ]
 
 # Short names people type, e.g. "ET". They map to a real region, so daylight saving is handled automatically.
@@ -507,26 +508,34 @@ class WebSchedulerApp:
 
     # ---------- Time zone helpers ----------
     def zone(self, key):
-        if key == DEVICE:
-            return None
-        if key not in self._zones:
-            self._zones[key] = timezone.utc if key == "UTC" else ZoneInfo(key)
-        return self._zones[key]
+            if key == DEVICE:
+                return None
+            if key not in self._zones:
+                if key == "UTC":
+                    self._zones[key] = timezone.utc
+                else:
+                    try:
+                        self._zones[key] = ZoneInfo(key)
+                    except Exception:
+                        # Fallback to fixed offset if tzdata is not installed
+                        off = next(h for k, _, h in ZONES if k == key)
+                        self._zones[key] = timezone(timedelta(hours=off))
+            return self._zones[key]
 
     def available_zone_names(self):
         names = dict(SPECIAL)
-        for key, name in ZONES:
+        for key, name, *_ in ZONES:
             try:
                 self.zone(key)
                 names[key] = name
-            except Exception:  # time zone data not installed
+            except Exception:
                 pass
         return names
 
     def tz_entries(self, ref):
         """[(label, key)] with the offset on the chosen date, sorted west to east."""
         rows = []
-        for key, name in ZONES:
+        for key, name, *_ in ZONES:
             if key in self.zone_names:
                 rows.append((ref.replace(tzinfo=self.zone(key)).utcoffset(), name, key))
         rows.sort(key=lambda r: (r[0], r[1]))
