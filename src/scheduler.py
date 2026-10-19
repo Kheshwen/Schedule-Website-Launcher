@@ -1,16 +1,24 @@
-import os
-import re
-import json
-import subprocess
 import csv
 import ctypes
+import json
+import os
+import re
+import subprocess
+import sys
 from ctypes import wintypes
+from datetime import datetime, timedelta, timezone
 from io import StringIO
-from datetime import datetime, timedelta
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+try:
+    import sv_ttk  # modern light/dark theme (optional: the app still works without it)
+except Exception:
+    sv_ttk = None
+
+APP_VERSION = "3.2"
 TASK_PREFIX = "AutoWeb_"
 NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # stops console flashing in the .exe
 DT_FMT = "%d/%m/%Y %H:%M"
@@ -31,6 +39,139 @@ WMI_SET = (
     "Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods | "
     "ForEach-Object { Invoke-CimMethod -InputObject $_ -MethodName WmiSetBrightness -Arguments @{Timeout=1; Brightness=%d} }"
 )
+
+# ---------- Time zones ----------
+DEVICE = "device"
+SPECIAL = {DEVICE: "Device time (default)", "UTC": "UTC"}
+
+# One entry per region people actually use: (IANA name, label). Offsets are added live for the chosen date.
+ZONES = [
+    ("Pacific/Honolulu", "Hawaii · Honolulu"),
+    ("America/Anchorage", "Alaska · Anchorage"),
+    ("America/Los_Angeles", "Pacific Time · Los Angeles"),
+    ("America/Denver", "Mountain Time · Denver"),
+    ("America/Chicago", "Central Time · Chicago"),
+    ("America/New_York", "Eastern Time · New York"),
+    ("America/Halifax", "Atlantic Time · Halifax"),
+    ("America/St_Johns", "Newfoundland · St. John's"),
+    ("America/Sao_Paulo", "Brazil · Sao Paulo"),
+    ("Europe/London", "UK · London"),
+    ("Europe/Berlin", "Central Europe · Berlin"),
+    ("Europe/Athens", "Eastern Europe · Athens"),
+    ("Africa/Cairo", "Egypt · Cairo"),
+    ("Africa/Johannesburg", "South Africa · Johannesburg"),
+    ("Europe/Moscow", "Russia · Moscow"),
+    ("Europe/Istanbul", "Turkey · Istanbul"),
+    ("Asia/Riyadh", "Saudi Arabia · Riyadh"),
+    ("Africa/Nairobi", "East Africa · Nairobi"),
+    ("Asia/Tehran", "Iran · Tehran"),
+    ("Asia/Dubai", "UAE · Dubai"),
+    ("Asia/Karachi", "Pakistan · Karachi"),
+    ("Asia/Kolkata", "India · Kolkata"),
+    ("Asia/Kathmandu", "Nepal · Kathmandu"),
+    ("Asia/Dhaka", "Bangladesh · Dhaka"),
+    ("Asia/Bangkok", "Thailand / Vietnam · Bangkok"),
+    ("Asia/Jakarta", "Indonesia · Jakarta"),
+    ("Asia/Kuala_Lumpur", "Malaysia / Singapore · Kuala Lumpur"),
+    ("Asia/Shanghai", "China · Shanghai"),
+    ("Asia/Hong_Kong", "Hong Kong"),
+    ("Asia/Manila", "Philippines · Manila"),
+    ("Australia/Perth", "Western Australia · Perth"),
+    ("Asia/Tokyo", "Japan · Tokyo"),
+    ("Asia/Seoul", "Korea · Seoul"),
+    ("Australia/Adelaide", "Australia · Adelaide"),
+    ("Australia/Sydney", "Australia · Sydney / Melbourne"),
+    ("Pacific/Auckland", "New Zealand · Auckland"),
+]
+
+# Short names people type, e.g. "ET". They map to a real region, so daylight saving is handled automatically.
+ALIASES = {
+    "et": "America/New_York", "est": "America/New_York", "edt": "America/New_York",
+    "ct": "America/Chicago", "cdt": "America/Chicago",
+    "mt": "America/Denver", "mst": "America/Denver", "mdt": "America/Denver",
+    "pt": "America/Los_Angeles", "pst": "America/Los_Angeles", "pdt": "America/Los_Angeles",
+    "akst": "America/Anchorage", "akdt": "America/Anchorage", "hst": "Pacific/Honolulu",
+    "nst": "America/St_Johns", "ndt": "America/St_Johns", "brt": "America/Sao_Paulo",
+    "gmt": "Europe/London", "bst": "Europe/London", "uk": "Europe/London",
+    "cet": "Europe/Berlin", "cest": "Europe/Berlin", "eet": "Europe/Athens", "eest": "Europe/Athens",
+    "sast": "Africa/Johannesburg", "msk": "Europe/Moscow", "eat": "Africa/Nairobi",
+    "gst": "Asia/Dubai", "uae": "Asia/Dubai", "pkt": "Asia/Karachi", "ist": "Asia/Kolkata",
+    "npt": "Asia/Kathmandu", "bdt": "Asia/Dhaka", "ict": "Asia/Bangkok", "wib": "Asia/Jakarta",
+    "myt": "Asia/Kuala_Lumpur", "sgt": "Asia/Kuala_Lumpur", "hkt": "Asia/Hong_Kong",
+    "pht": "Asia/Manila", "awst": "Australia/Perth", "jst": "Asia/Tokyo", "kst": "Asia/Seoul",
+    "acst": "Australia/Adelaide", "acdt": "Australia/Adelaide",
+    "aest": "Australia/Sydney", "aedt": "Australia/Sydney",
+    "nzst": "Pacific/Auckland", "nzdt": "Pacific/Auckland",
+}
+
+OFFSET_TAIL = re.compile(r"\s*\(utc[^)]*\)\s*$", re.I)
+
+
+def fmt_offset(delta):
+    minutes = int(delta.total_seconds() // 60)
+    sign = "+" if minutes >= 0 else "-"
+    minutes = abs(minutes)
+    return f"{sign}{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def zone_issue(dt, tz):
+    """Returns 'gap' if the time doesn't exist (clocks jump forward), 'ambiguous' if it happens twice, else None."""
+    first, second = dt.replace(tzinfo=tz, fold=0), dt.replace(tzinfo=tz, fold=1)
+    if first.utcoffset() == second.utcoffset():
+        return None
+    round_trip = first.astimezone(timezone.utc).astimezone(tz).replace(tzinfo=None)
+    return "gap" if round_trip != dt else "ambiguous"
+
+
+def resolve_zone(text, names):
+    """Turns what the user typed (a label, a part of it, or an abbreviation like ET) into one zone key, or None."""
+    t = OFFSET_TAIL.sub("", text.strip()).strip().lower()
+    if not t:
+        return None
+    for key, name in names.items():
+        if t == name.lower():
+            return key
+    if ALIASES.get(t) in names:
+        return ALIASES[t]
+    hits = [k for k, n in names.items()
+            if t in n.lower() or t in k.lower() or t in k.lower().replace("_", " ")]
+    return hits[0] if len(hits) == 1 else None
+
+
+# ---------- Theme ----------
+PALETTE = {
+    "light": {"bg": "#fafafa", "fg": "#1c1c1c", "field": "#ffffff", "accent": "#005fb8",
+              "muted": "#707070", "sel_bg": "#005fb8", "sel_fg": "#ffffff"},
+    "dark": {"bg": "#1c1c1c", "fg": "#fafafa", "field": "#2b2b2b", "accent": "#60cdff",
+             "muted": "#9a9a9a", "sel_bg": "#57c8ff", "sel_fg": "#000000"},
+}
+
+
+def system_theme():
+    """Reads the Windows light/dark setting."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+            return "light" if winreg.QueryValueEx(k, "AppsUseLightTheme")[0] else "dark"
+    except Exception:
+        return "light"
+
+
+def enable_dpi_awareness():
+    """Stops Windows from blurring the window on high-resolution screens."""
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+def resource_path(name):
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
 
 
 def run(cmd):
@@ -53,6 +194,49 @@ def save_settings(data):
             json.dump(data, f)
     except Exception:
         pass
+
+
+class PlaceholderEntry(ttk.Entry):
+    """Entry that shows grey hint text while it is empty and unfocused."""
+
+    def __init__(self, master, placeholder, **kw):
+        super().__init__(master, **kw)
+        self.placeholder = placeholder
+        self.showing = False
+        self.muted = "#888888"
+        self.bind("<FocusIn>", lambda e: self._hide(), add="+")
+        self.bind("<FocusOut>", lambda e: self._show(), add="+")
+        self._show()
+
+    def value(self):
+        return "" if self.showing else self.get()
+
+    def clear(self):
+        self._hide()
+        self.delete(0, "end")
+        try:
+            focused = self.focus_get() is self
+        except Exception:
+            focused = False
+        if not focused:
+            self._show()
+
+    def set_muted(self, color):
+        self.muted = color
+        if self.showing:
+            self.configure(foreground=color)
+
+    def _show(self):
+        if not self.showing and not self.get():
+            self.showing = True
+            self.insert(0, self.placeholder)
+            self.configure(foreground=self.muted)
+
+    def _hide(self):
+        if self.showing:
+            self.delete(0, "end")
+            self.showing = False
+            self.configure(foreground="")
 
 
 class PHYSICAL_MONITOR(ctypes.Structure):
@@ -134,13 +318,22 @@ class Dimmer:
             pass
 
 
+NAV_KEYS = {"Return", "Tab", "Up", "Down", "Left", "Right", "Escape", "Home", "End",
+            "Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R"}
+
+
 class WebSchedulerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Schedule Website Launcher V3.1")
+        self.root.title(f"Schedule Website Launcher V{APP_VERSION}")
         self.settings = load_settings()
-        self.root.minsize(640, 560)
+        self.scale = max(1.0, self.root.winfo_fpixels("1i") / 96.0)
+        self.root.minsize(self.px(680), self.px(620))
         self.apply_saved_geometry()
+        try:
+            self.root.iconbitmap(default=resource_path("icon.ico"))
+        except Exception:
+            pass
 
         self.black = None
         self.dimmer = Dimmer()
@@ -148,29 +341,52 @@ class WebSchedulerApp:
         self.rows = []
         self.overdue_tries = {}
         self.status_job = None
+        self.combos = []
+        self._zones = {}
+        self.tz_editing = False
+        self.mode = "light"
+
         col = self.settings.get("sort_col")
         self.sort_col = col if col in ("Task", "Next", "Status") else "Next"
         self.sort_rev = bool(self.settings.get("sort_rev", False))
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
+        pref = self.settings.get("theme")
+        self.theme_pref = pref if pref in ("system", "light", "dark") else "system"
+
+        self.zone_names = self.available_zone_names()
+        saved_tz = self.settings.get("tz", DEVICE)
+        self.tz_key = saved_tz if saved_tz in self.zone_names else DEVICE
+        self.last_good_tz = self.tz_key
+
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.apply_theme()  # first, so the theme's button styles exist before the widgets are built
         self.create_widgets()
+        self.apply_theme()
+        self.refresh_tz_widget(self.ref_datetime())
+        self.update_form_info()
         self.refresh_task_list()
+        if len(self.zone_names) <= len(SPECIAL):
+            self.set_status("Time zone data is missing, so only device time and UTC are available.")
         self.root.after(AUTO_REFRESH_MS, self.auto_refresh)
 
     # ---------- Settings / window ----------
+    def px(self, n):
+        return int(n * self.scale)
+
     def apply_saved_geometry(self):
-        self.root.geometry("720x620")
+        self.root.geometry(f"{self.px(760)}x{self.px(700)}")
+        # Sizes saved by older versions were not scaled for high-resolution screens, so they are skipped
         m = re.fullmatch(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", str(self.settings.get("geometry", "")))
-        if m:
-            w, h = max(int(m.group(1)), 640), max(int(m.group(2)), 560)
+        if m and self.settings.get("dpi") == 1:
+            w, h = max(int(m.group(1)), self.px(680)), max(int(m.group(2)), self.px(620))
             x, y = int(m.group(3)), int(m.group(4))
             sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
             if -w + 100 < x < sw - 100 and 0 <= y < sh - 100:  # skip the position if it would be off-screen
                 self.root.geometry(f"{w}x{h}+{x}+{y}")
             else:
                 self.root.geometry(f"{w}x{h}")
-        if self.settings.get("zoomed"):
-            self.root.state("zoomed")
+            if self.settings.get("zoomed"):
+                self.root.state("zoomed")
 
     def on_close(self):
         self.close_black()  # makes sure brightness is restored
@@ -182,9 +398,12 @@ class WebSchedulerApp:
             save_settings({
                 "geometry": self.root.geometry(),
                 "zoomed": state == "zoomed",
+                "dpi": 1,
                 "sort_col": self.sort_col,
                 "sort_rev": self.sort_rev,
                 "dim": self.dim_var.get(),
+                "tz": self.last_good_tz,
+                "theme": self.theme_pref,
             })
         except Exception:
             pass
@@ -196,23 +415,212 @@ class WebSchedulerApp:
             self.root.after_cancel(self.status_job)
         self.status_job = self.root.after(6000, lambda: self.status_var.set(""))
 
-    def combo(self, parent, var, values, width):
-        return ttk.Combobox(parent, textvariable=var, values=values, width=width)
+    # ---------- Theme ----------
+    def apply_theme(self):
+        self.mode = system_theme() if self.theme_pref == "system" else self.theme_pref
+        if sv_ttk is None:
+            self.mode = "light"
+        pal = PALETTE[self.mode]
+        if sv_ttk:
+            try:
+                sv_ttk.set_theme(self.mode)
+            except Exception:
+                pass
+        try:
+            ttk.Style().configure("Treeview", rowheight=self.px(28))
+        except Exception:
+            pass
+        self.root.configure(bg=pal["bg"])
+        if hasattr(self, "tree"):
+            self.tree.tag_configure("pending", foreground=pal["accent"])
+            self.tree.tag_configure("done", foreground=pal["muted"])
+        if hasattr(self, "url_entry"):
+            self.url_entry.set_muted(pal["muted"])
+        if hasattr(self, "preview_label"):
+            self.preview_label.configure(foreground=pal["accent"])
+        self.style_combo_popups()
+        self.set_titlebar(self.root)
 
+    def on_theme_change(self, event=None):
+        self.theme_pref = self.theme_var.get().lower()
+        self.apply_theme()
+        self.theme_combo.selection_clear()
+
+    def set_titlebar(self, win):
+        """Makes the Windows title bar dark to match the theme."""
+        try:
+            win.update_idletasks()
+            user32, dwm = ctypes.windll.user32, ctypes.windll.dwmapi
+            user32.GetParent.argtypes = [wintypes.HWND]
+            user32.GetParent.restype = wintypes.HWND
+            dwm.DwmSetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+            hwnd = user32.GetParent(win.winfo_id())
+            value = ctypes.c_int(1 if self.mode == "dark" else 0)
+            for attribute in (20, 19):  # 20 on current Windows 10/11, 19 on older builds
+                if dwm.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value)) == 0:
+                    break
+        except Exception:
+            pass
+
+    def style_combo_popups(self):
+        """The theme doesn't colour the dropdown lists, so they are coloured by hand."""
+        pal = PALETTE[self.mode]
+        alive = []
+        for cb in self.combos:
+            try:
+                if not cb.winfo_exists():
+                    continue
+                pop = self.root.tk.call("ttk::combobox::PopdownWindow", str(cb))
+                self.root.tk.call(f"{pop}.f.l", "configure",
+                                  "-background", pal["field"], "-foreground", pal["fg"],
+                                  "-selectbackground", pal["sel_bg"], "-selectforeground", pal["sel_fg"],
+                                  "-borderwidth", 0, "-highlightthickness", 0)
+                alive.append(cb)
+            except Exception:
+                pass
+        self.combos = alive
+
+    def combo(self, parent, var, values, width, readonly=False):
+        cb = ttk.Combobox(parent, textvariable=var, values=values, width=width,
+                          state="readonly" if readonly else "normal")
+        self.combos.append(cb)
+        return cb
+
+    # ---------- Time zone helpers ----------
+    def zone(self, key):
+        if key == DEVICE:
+            return None
+        if key not in self._zones:
+            self._zones[key] = timezone.utc if key == "UTC" else ZoneInfo(key)
+        return self._zones[key]
+
+    def available_zone_names(self):
+        names = dict(SPECIAL)
+        for key, name in ZONES:
+            try:
+                self.zone(key)
+                names[key] = name
+            except Exception:  # time zone data not installed
+                pass
+        return names
+
+    def tz_entries(self, ref):
+        """[(label, key)] with the offset on the chosen date, sorted west to east."""
+        rows = []
+        for key, name in ZONES:
+            if key in self.zone_names:
+                rows.append((ref.replace(tzinfo=self.zone(key)).utcoffset(), name, key))
+        rows.sort(key=lambda r: (r[0], r[1]))
+        entries = [(SPECIAL[DEVICE], DEVICE), (SPECIAL["UTC"], "UTC")]
+        entries += [(f"{name} (UTC{fmt_offset(off)})", key) for off, name, key in rows]
+        return entries
+
+    def entered_datetime(self):
+        try:
+            return datetime(int(self.year.get()), int(self.month.get()), int(self.day.get()),
+                            int(self.hour.get()), int(self.minute.get()))
+        except ValueError:
+            return None
+
+    def ref_datetime(self):
+        return self.entered_datetime() or datetime.now()
+
+    def refresh_tz_widget(self, ref):
+        entries = self.tz_entries(ref)
+        self.tz_combo["values"] = [label for label, _ in entries]
+        for label, key in entries:
+            if key == self.tz_key:
+                self.tz_var.set(label)
+                break
+
+    def preview_text(self, dt):
+        key = self.tz_key
+        if key is None:
+            return "Choose a time zone from the list."
+        if key == DEVICE:
+            return ""
+        tz = self.zone(key)
+        issue = zone_issue(dt, tz)
+        if issue == "gap":
+            return "That time doesn't exist in this time zone because the clocks change. Pick another time."
+        local = dt.replace(tzinfo=tz).astimezone().replace(tzinfo=None)
+        note = "  (this time happens twice, the first one is used)" if issue == "ambiguous" else ""
+        return f"Runs at {local:%a %d/%m/%Y %H:%M} your device time{note}"
+
+    def update_form_info(self, *_):
+        dt = self.entered_datetime()
+        if dt is None:
+            self.day_var.set("")
+            self.preview_var.set("")
+            return
+        self.day_var.set(dt.strftime("%a"))
+        if not self.tz_editing:
+            self.refresh_tz_widget(dt)  # offsets can change with the date (daylight saving)
+        self.preview_var.set(self.preview_text(dt))
+
+    def tz_focus_in(self, event=None):
+        self.tz_editing = True
+
+    def tz_focus_out(self, event=None):
+        self.tz_editing = False
+        self.commit_tz(keep_previous=True)
+
+    def tz_typing(self, event):
+        if event.keysym in NAV_KEYS:
+            return
+        text = OFFSET_TAIL.sub("", self.tz_var.get().strip()).strip().lower()
+        self.tz_key = resolve_zone(self.tz_var.get(), self.zone_names)
+        entries = self.tz_entries(self.ref_datetime())
+        shown = [label for label, key in entries if not text or text in label.lower() or ALIASES.get(text) == key]
+        self.tz_combo["values"] = shown or [label for label, _ in entries]  # the dropdown narrows as you type
+        dt = self.entered_datetime()
+        self.preview_var.set(self.preview_text(dt) if dt else "")
+
+    def commit_tz(self, event=None, keep_previous=False):
+        key = resolve_zone(self.tz_var.get(), self.zone_names)
+        if key is None and keep_previous:
+            key = self.last_good_tz
+        if key is not None:
+            self.tz_key = self.last_good_tz = key
+        self.refresh_tz_widget(self.ref_datetime())
+        dt = self.entered_datetime()
+        self.preview_var.set(self.preview_text(dt) if dt else "")
+
+    def on_tz_selected(self, event=None):
+        self.commit_tz()
+        self.tz_combo.selection_clear()
+
+    def on_tz_return(self, event=None):
+        if resolve_zone(self.tz_var.get(), self.zone_names) is None:
+            messagebox.showwarning("Input Error", "That time zone isn't recognised. Pick one from the list.")
+            return
+        self.commit_tz()
+        self.schedule_launch()
+
+    # ---------- Layout ----------
     def create_widgets(self):
-        # ---- Status bar (packed first so it stays at the bottom) ----
+        accent = {"style": "Accent.TButton"} if sv_ttk else {}
+        switch = {"style": "Switch.TCheckbutton"} if sv_ttk else {}
+
+        # ---- Bottom bar (packed first so it stays at the bottom) ----
+        bar = ttk.Frame(self.root)
+        bar.pack(side="bottom", fill="x", padx=14, pady=(0, 8))
         self.status_var = tk.StringVar()
-        ttk.Label(self.root, textvariable=self.status_var, anchor="w", relief="sunken",
-                  padding=(8, 3)).pack(side="bottom", fill="x")
+        ttk.Label(bar, textvariable=self.status_var, anchor="w").pack(side="left", fill="x", expand=True)
+        if sv_ttk:
+            self.theme_var = tk.StringVar(value=self.theme_pref.capitalize())
+            self.theme_combo = self.combo(bar, self.theme_var, ["System", "Light", "Dark"], 8, readonly=True)
+            self.theme_combo.pack(side="right")
+            ttk.Label(bar, text="Theme:").pack(side="right", padx=(0, 6))
+            self.theme_combo.bind("<<ComboboxSelected>>", self.on_theme_change)
 
         # ---- Schedule form ----
-        f = ttk.LabelFrame(self.root, text="Schedule", padding=10)
-        f.pack(fill="x", padx=10, pady=10)
+        f = ttk.LabelFrame(self.root, text="Schedule", padding=12)
+        f.pack(fill="x", padx=14, pady=(14, 10))
 
-        ttk.Label(f, text="Website URL:").grid(row=0, column=0, sticky="w", pady=5)
-        self.url_var = tk.StringVar()
-        self.url_entry = ttk.Entry(f, textvariable=self.url_var, width=55)
-        self.url_entry.grid(row=0, column=1, columnspan=2, sticky="w", padx=5)
+        ttk.Label(f, text="Website URL:").grid(row=0, column=0, sticky="w", pady=6)
+        self.url_entry = PlaceholderEntry(f, "e.g. youtube.com", width=58)
+        self.url_entry.grid(row=0, column=1, columnspan=2, sticky="w", padx=6)
 
         d = datetime.now() + timedelta(minutes=5)
         self.day = tk.StringVar(value=f"{d.day:02d}")
@@ -220,53 +628,74 @@ class WebSchedulerApp:
         self.year = tk.StringVar(value=str(d.year))
         self.hour = tk.StringVar(value=f"{d.hour:02d}")
         self.minute = tk.StringVar(value=f"{d.minute:02d}")
+        self.day_var = tk.StringVar()
+        self.preview_var = tk.StringVar()
+        self.tz_var = tk.StringVar()
 
-        ttk.Label(f, text="Date:").grid(row=1, column=0, sticky="w", pady=5)
+        ttk.Label(f, text="Date:").grid(row=1, column=0, sticky="w", pady=6)
         date_row = ttk.Frame(f)
-        date_row.grid(row=1, column=1, sticky="w", padx=5)
+        date_row.grid(row=1, column=1, columnspan=2, sticky="w", padx=6)
         self.combo(date_row, self.day, [f"{i:02d}" for i in range(1, 32)], 4).pack(side="left")
-        ttk.Label(date_row, text="/").pack(side="left")
+        ttk.Label(date_row, text="/").pack(side="left", padx=2)
         self.combo(date_row, self.month, [f"{i:02d}" for i in range(1, 13)], 4).pack(side="left")
-        ttk.Label(date_row, text="/").pack(side="left")
+        ttk.Label(date_row, text="/").pack(side="left", padx=2)
         self.combo(date_row, self.year, [str(d.year + i) for i in range(4)], 6).pack(side="left")
+        ttk.Label(date_row, textvariable=self.day_var, width=5, anchor="w").pack(side="left", padx=(12, 0))
 
-        ttk.Label(f, text="Time (24h):").grid(row=2, column=0, sticky="w", pady=5)
+        ttk.Label(f, text="Time (24h):").grid(row=2, column=0, sticky="w", pady=6)
         time_row = ttk.Frame(f)
-        time_row.grid(row=2, column=1, sticky="w", padx=5)
+        time_row.grid(row=2, column=1, columnspan=2, sticky="w", padx=6)
         self.combo(time_row, self.hour, [f"{i:02d}" for i in range(24)], 4).pack(side="left")
-        ttk.Label(time_row, text=":").pack(side="left")
+        ttk.Label(time_row, text=":").pack(side="left", padx=2)
         self.combo(time_row, self.minute, [f"{i:02d}" for i in range(60)], 4).pack(side="left")
 
-        # Enter in any of the input boxes schedules the launch
-        enter_widgets = [self.url_entry] + [c for row in (date_row, time_row)
-                                            for c in row.winfo_children() if isinstance(c, ttk.Combobox)]
-        for w in enter_widgets:
+        ttk.Label(f, text="Time zone:").grid(row=3, column=0, sticky="w", pady=6)
+        self.tz_combo = self.combo(f, self.tz_var, [], 46)
+        self.tz_combo.grid(row=3, column=1, columnspan=2, sticky="w", padx=6)
+        self.tz_combo.bind("<FocusIn>", self.tz_focus_in)
+        self.tz_combo.bind("<FocusOut>", self.tz_focus_out)
+        self.tz_combo.bind("<KeyRelease>", self.tz_typing)
+        self.tz_combo.bind("<<ComboboxSelected>>", self.on_tz_selected)
+        self.tz_combo.bind("<Return>", self.on_tz_return)
+
+        self.preview_label = ttk.Label(f, textvariable=self.preview_var)
+        self.preview_label.grid(row=4, column=1, columnspan=2, sticky="w", padx=6)
+
+        # Enter in the URL, date or time boxes schedules the launch
+        for w in [self.url_entry] + [c for row in (date_row, time_row)
+                                     for c in row.winfo_children() if isinstance(c, ttk.Combobox)]:
             w.bind("<Return>", lambda e: self.schedule_launch())
 
+        for var in (self.day, self.month, self.year, self.hour, self.minute):
+            var.trace_add("write", self.update_form_info)
+
         btns = ttk.Frame(f)
-        btns.grid(row=3, column=0, columnspan=3, pady=(10, 0))
-        ttk.Button(btns, text="Schedule Launch", command=self.schedule_launch).pack(side="left", padx=5)
+        btns.grid(row=5, column=0, columnspan=3, pady=(12, 0))
+        ttk.Button(btns, text="Schedule Launch", command=self.schedule_launch, **accent).pack(side="left", padx=5)
         ttk.Button(btns, text="Schedule Shutdown", command=self.schedule_shutdown).pack(side="left", padx=5)
         ttk.Button(btns, text="Abort Shutdown Countdown", command=self.abort_shutdown).pack(side="left", padx=5)
 
         # ---- Black screen ----
-        b = ttk.LabelFrame(self.root, text="Black Screen (audio keeps playing)", padding=10)
-        b.pack(fill="x", padx=10, pady=(0, 10))
+        b = ttk.LabelFrame(self.root, text="Black Screen (audio keeps playing)", padding=12)
+        b.pack(fill="x", padx=14, pady=(0, 10))
         self.black_btn = ttk.Button(b, text="Turn On Black Screen", command=self.toggle_black)
         self.black_btn.pack(side="left")
         self.dim_var = tk.BooleanVar(value=bool(self.settings.get("dim", True)))
-        ttk.Checkbutton(b, text="Also lower brightness", variable=self.dim_var).pack(side="left", padx=10)
+        ttk.Checkbutton(b, text="Also lower brightness", variable=self.dim_var, **switch).pack(side="left", padx=14)
         ttk.Label(b, text="Esc or double-click to exit.").pack(side="left")
 
         # ---- Task list ----
-        lf = ttk.LabelFrame(self.root, text="Scheduled Tasks (click a heading to sort, double-click a task to edit)", padding=10)
-        lf.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        lf = ttk.LabelFrame(self.root, text="Scheduled Tasks (click a heading to sort, double-click a task to edit)",
+                            padding=12)
+        lf.pack(fill="both", expand=True, padx=14, pady=(0, 10))
 
-        self.tree = ttk.Treeview(lf, columns=("Task", "Next", "Status"), show="headings", height=8, selectmode="extended")
-        self.headings = {"Task": "Task / URL", "Next": "Next Run Time", "Status": "Status"}
-        for col, w in (("Task", 300), ("Next", 140), ("Status", 80)):
-            self.tree.heading(col, text=self.headings[col], command=lambda c=col: self.sort_by(c))
-            self.tree.column(col, width=w, minwidth=80, stretch=(col == "Task"))
+        self.tree = ttk.Treeview(lf, columns=("Task", "Day", "Next", "Status"), show="headings", height=8,
+                                 selectmode="extended")
+        self.headings = {"Task": "Task / URL", "Day": "Day", "Next": "Next Run Time", "Status": "Status"}
+        for col, w in (("Task", 280), ("Day", 60), ("Next", 140), ("Status", 80)):
+            self.tree.heading(col, text=self.headings[col],
+                              command=lambda c=col: self.sort_by("Next" if c == "Day" else c))
+            self.tree.column(col, width=self.px(w), minwidth=self.px(50), stretch=(col == "Task"))
         self.tree.pack(side="left", fill="both", expand=True)
         sb = ttk.Scrollbar(lf, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
@@ -275,7 +704,7 @@ class WebSchedulerApp:
         self.tree.bind("<Delete>", lambda e: self.delete_selected())
 
         bf = ttk.Frame(self.root)
-        bf.pack(fill="x", padx=10, pady=(0, 10))
+        bf.pack(fill="x", padx=14, pady=(0, 10))
         ttk.Button(bf, text="Refresh", command=self.refresh_task_list).pack(side="left", padx=5)
         ttk.Button(bf, text="Clear Past Tasks", command=self.clear_past).pack(side="left", padx=5)
         ttk.Button(bf, text="Edit Selected", command=self.edit_selected).pack(side="left", padx=5)
@@ -283,12 +712,27 @@ class WebSchedulerApp:
 
     # ---------- Inputs ----------
     def get_datetime(self):
-        try:
-            dt = datetime(int(self.year.get()), int(self.month.get()), int(self.day.get()),
-                          int(self.hour.get()), int(self.minute.get()))
-        except ValueError:
+        """The entered time converted to device time, or None if something is wrong."""
+        dt = self.entered_datetime()
+        if dt is None:
             messagebox.showwarning("Input Error", "That date or time isn't valid. Please use numbers only and check the values.")
             return None
+        key = self.tz_key
+        if key is None:
+            messagebox.showwarning("Input Error", "Choose a time zone from the list.")
+            return None
+        if key != DEVICE:
+            tz = self.zone(key)
+            issue = zone_issue(dt, tz)
+            if issue == "gap":
+                messagebox.showwarning("Input Error", "That time doesn't exist in this time zone because the clocks "
+                                                      "change that day. Please pick another time.")
+                return None
+            if issue == "ambiguous" and not messagebox.askokcancel(
+                    "Time happens twice", "The clocks go back in that time zone, so this time happens twice. "
+                                          "The first one will be used. Continue?"):
+                return None
+            dt = dt.replace(tzinfo=tz).astimezone().replace(tzinfo=None)
         if dt <= datetime.now():
             messagebox.showwarning("Input Error", "The scheduled time must be in the future.")
             return None
@@ -306,7 +750,7 @@ class WebSchedulerApp:
 
     # ---------- Schedule ----------
     def schedule_launch(self):
-        url = self.url_var.get().strip()
+        url = self.url_entry.value().strip()
         if not url:
             messagebox.showwarning("Input Error", "URL cannot be empty.")
             return
@@ -319,8 +763,8 @@ class WebSchedulerApp:
         domain = urlparse(url).netloc.replace(".", "_") or "WebLaunch"
         name = f"{TASK_PREFIX}{domain}_{datetime.now():%H%M%S}"
         if self.create_task(name, f'explorer.exe "{url}"', dt):
-            self.set_status(f"Scheduled {url} for {dt:%d/%m/%Y %H:%M}.")
-            self.url_var.set("")
+            self.set_status(f"Scheduled {url} for {dt:%a %d/%m/%Y %H:%M} (your device time).")
+            self.url_entry.clear()
 
     def schedule_shutdown(self):
         dt = self.get_datetime()
@@ -329,7 +773,7 @@ class WebSchedulerApp:
         name = f"{TASK_PREFIX}SHUTDOWN_{datetime.now():%H%M%S}"
         # 60-second countdown after it triggers, so you have time to abort
         if self.create_task(name, "shutdown.exe /s /t 60", dt):
-            self.set_status(f"PC will start shutting down at {dt:%d/%m/%Y %H:%M} (60 sec countdown).")
+            self.set_status(f"PC will start shutting down at {dt:%a %d/%m/%Y %H:%M} (60 sec countdown).")
 
     def abort_shutdown(self):
         result = run(["shutdown", "/a"])
@@ -391,7 +835,12 @@ class WebSchedulerApp:
         selected = set(self.tree.selection())
         self.tree.delete(*self.tree.get_children())
         for name, shown, nxt, status in sorted(self.rows, key=self.sort_key, reverse=self.sort_rev):
-            self.tree.insert("", "end", iid=name, values=(shown, nxt or "-", status))
+            try:
+                day = datetime.strptime(nxt, DT_FMT).strftime("%a")
+            except ValueError:
+                day = "-"
+            self.tree.insert("", "end", iid=name, values=(shown, day, nxt or "-", status),
+                             tags=("pending" if status == "Pending" else "done",))
         keep = [i for i in selected if self.tree.exists(i)]
         if keep:
             self.tree.selection_set(keep)
@@ -420,7 +869,7 @@ class WebSchedulerApp:
             self.delete_tasks(names)
 
     def clear_past(self):
-        names = [i for i in self.tree.get_children() if self.tree.item(i, "values")[2] == "Done"]
+        names = [i for i in self.tree.get_children() if self.tree.item(i, "values")[3] == "Done"]
         if not names:
             self.set_status("There are no past tasks to clear.")
             return
@@ -437,41 +886,61 @@ class WebSchedulerApp:
         is_shutdown = "SHUTDOWN" in name
         values = self.tree.item(name, "values")
         try:
-            d = datetime.strptime(values[1], DT_FMT)
+            d = datetime.strptime(values[2], DT_FMT)
         except ValueError:  # past task has no next run time
             d = datetime.now() + timedelta(minutes=5)
 
         win = tk.Toplevel(self.root)
         win.title("Edit Task")
+        win.configure(bg=PALETTE[self.mode]["bg"])
         win.resizable(False, False)
         win.transient(self.root)
-        win.grab_set()
-        ttk.Label(win, text=values[0]).grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 5))
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass
+        outer = ttk.Frame(win, padding=16)
+        outer.pack(fill="both", expand=True)
+        ttk.Label(outer, text=values[0]).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
         url_var = tk.StringVar(value=self.args.get(name, "").strip().strip('"'))
         if not is_shutdown:
-            ttk.Label(win, text="Website URL:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
-            ttk.Entry(win, textvariable=url_var, width=45).grid(row=1, column=1, padx=10)
+            ttk.Label(outer, text="Website URL:").grid(row=1, column=0, sticky="w", pady=6)
+            ttk.Entry(outer, textvariable=url_var, width=45).grid(row=1, column=1, padx=10)
 
         v = {k: tk.StringVar(value=val) for k, val in (
             ("d", f"{d.day:02d}"), ("m", f"{d.month:02d}"), ("y", str(d.year)),
             ("h", f"{d.hour:02d}"), ("min", f"{d.minute:02d}"))}
+        day_var = tk.StringVar(value=d.strftime("%a"))
 
-        ttk.Label(win, text="Date:").grid(row=2, column=0, sticky="w", padx=10, pady=5)
-        dr = ttk.Frame(win)
+        def update_day(*_):
+            try:
+                day_var.set(datetime(int(v["y"].get()), int(v["m"].get()), int(v["d"].get())).strftime("%a"))
+            except ValueError:
+                day_var.set("")
+
+        for key in ("d", "m", "y"):
+            v[key].trace_add("write", update_day)
+
+        ttk.Label(outer, text="Date:").grid(row=2, column=0, sticky="w", pady=6)
+        dr = ttk.Frame(outer)
         dr.grid(row=2, column=1, sticky="w", padx=10)
         self.combo(dr, v["d"], [f"{i:02d}" for i in range(1, 32)], 4).pack(side="left")
-        ttk.Label(dr, text="/").pack(side="left")
+        ttk.Label(dr, text="/").pack(side="left", padx=2)
         self.combo(dr, v["m"], [f"{i:02d}" for i in range(1, 13)], 4).pack(side="left")
-        ttk.Label(dr, text="/").pack(side="left")
+        ttk.Label(dr, text="/").pack(side="left", padx=2)
         self.combo(dr, v["y"], [str(datetime.now().year + i) for i in range(4)], 6).pack(side="left")
+        ttk.Label(dr, textvariable=day_var, width=5, anchor="w").pack(side="left", padx=(12, 0))
 
-        ttk.Label(win, text="Time (24h):").grid(row=3, column=0, sticky="w", padx=10, pady=5)
-        tr = ttk.Frame(win)
+        ttk.Label(outer, text="Time (24h):").grid(row=3, column=0, sticky="w", pady=6)
+        tr = ttk.Frame(outer)
         tr.grid(row=3, column=1, sticky="w", padx=10)
         self.combo(tr, v["h"], [f"{i:02d}" for i in range(24)], 4).pack(side="left")
-        ttk.Label(tr, text=":").pack(side="left")
+        ttk.Label(tr, text=":").pack(side="left", padx=2)
         self.combo(tr, v["min"], [f"{i:02d}" for i in range(60)], 4).pack(side="left")
+
+        ttk.Label(outer, text="Times here are in your device time zone.").grid(
+            row=4, column=1, sticky="w", padx=10, pady=(2, 0))
 
         def save():
             try:
@@ -500,10 +969,14 @@ class WebSchedulerApp:
             else:
                 messagebox.showerror("System Error", f"Could not update task.\n\n{result.stderr}", parent=win)
 
-        bf = ttk.Frame(win)
-        bf.grid(row=4, column=0, columnspan=2, pady=10)
-        ttk.Button(bf, text="Save", command=save).pack(side="left", padx=5)
+        bf = ttk.Frame(outer)
+        bf.grid(row=5, column=0, columnspan=2, pady=(14, 0))
+        accent = {"style": "Accent.TButton"} if sv_ttk else {}
+        ttk.Button(bf, text="Save", command=save, **accent).pack(side="left", padx=5)
         ttk.Button(bf, text="Cancel", command=win.destroy).pack(side="left", padx=5)
+
+        self.style_combo_popups()
+        self.set_titlebar(win)
 
     # ---------- Black screen ----------
     def toggle_black(self):
@@ -536,6 +1009,7 @@ class WebSchedulerApp:
 
 
 if __name__ == "__main__":
+    enable_dpi_awareness()
     root = tk.Tk()
     WebSchedulerApp(root)
     root.mainloop()
