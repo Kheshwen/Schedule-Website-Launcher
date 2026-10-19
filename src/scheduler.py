@@ -23,7 +23,11 @@ TASK_PREFIX = "AutoWeb_"
 NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # stops console flashing in the .exe
 DT_FMT = "%d/%m/%Y %H:%M"
 AUTO_REFRESH_MS = 15000
-SETTINGS_FILE = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "WebsiteLauncher", "settings.json")
+SETTINGS_FILE = os.path.join(
+    os.environ.get("APPDATA") or os.path.expanduser("~"),
+    "WebsiteLauncher",
+    "settings.json",
+)
 
 # Filters by name inside PowerShell, so it only fetches our tasks (much faster)
 PS_LIST = (
@@ -87,7 +91,7 @@ ZONES = [
 # Short names people type, e.g. "ET". They map to a real region, so daylight saving is handled automatically.
 ALIASES = {
     "et": "America/New_York", "est": "America/New_York", "edt": "America/New_York",
-    "ct": "America/Chicago", "cdt": "America/Chicago",
+    "ct": "America/Chicago", "cst": "America/Chicago", "cdt": "America/Chicago",
     "mt": "America/Denver", "mst": "America/Denver", "mdt": "America/Denver",
     "pt": "America/Los_Angeles", "pst": "America/Los_Angeles", "pdt": "America/Los_Angeles",
     "akst": "America/Anchorage", "akdt": "America/Anchorage", "hst": "Pacific/Honolulu",
@@ -133,17 +137,23 @@ def resolve_zone(text, names):
             return key
     if ALIASES.get(t) in names:
         return ALIASES[t]
-    hits = [k for k, n in names.items()
-            if t in n.lower() or t in k.lower() or t in k.lower().replace("_", " ")]
+    hits = [
+        k for k, n in names.items()
+        if t in n.lower() or t in k.lower() or t in k.lower().replace("_", " ")
+    ]
     return hits[0] if len(hits) == 1 else None
 
 
 # ---------- Theme ----------
 PALETTE = {
-    "light": {"bg": "#fafafa", "fg": "#1c1c1c", "field": "#ffffff", "accent": "#005fb8",
-              "muted": "#707070", "sel_bg": "#005fb8", "sel_fg": "#ffffff"},
-    "dark": {"bg": "#1c1c1c", "fg": "#fafafa", "field": "#2b2b2b", "accent": "#60cdff",
-             "muted": "#9a9a9a", "sel_bg": "#57c8ff", "sel_fg": "#000000"},
+    "light": {
+        "bg": "#fafafa", "fg": "#1c1c1c", "field": "#ffffff", "accent": "#005fb8",
+        "muted": "#707070", "sel_bg": "#005fb8", "sel_fg": "#ffffff"
+    },
+    "dark": {
+        "bg": "#1c1c1c", "fg": "#fafafa", "field": "#2b2b2b", "accent": "#60cdff",
+        "muted": "#9a9a9a", "sel_bg": "#57c8ff", "sel_fg": "#000000"
+    },
 }
 
 
@@ -151,8 +161,10 @@ def system_theme():
     """Reads the Windows light/dark setting."""
     try:
         import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        ) as k:
             return "light" if winreg.QueryValueEx(k, "AppsUseLightTheme")[0] else "dark"
     except Exception:
         return "light"
@@ -271,9 +283,10 @@ class Dimmer:
     def _dim_ddc(self):
         try:
             u, d = ctypes.windll.user32, self._dxva2()
-            u.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
-            u.MonitorFromPoint.restype = ctypes.c_void_p
-            hmon = u.MonitorFromPoint(wintypes.POINT(0, 0), 1)  # primary monitor (the one the overlay covers)
+            # Use MonitorFromWindow with NULL (0) and MONITOR_DEFAULTTOPRIMARY (1) to avoid 64-bit POINT struct ABI issues
+            u.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+            u.MonitorFromWindow.restype = ctypes.c_void_p
+            hmon = u.MonitorFromWindow(0, 1)  # primary monitor
             n = wintypes.DWORD()
             if not d.GetNumberOfPhysicalMonitorsFromHMONITOR(hmon, ctypes.byref(n)) or n.value == 0:
                 return False
@@ -318,8 +331,10 @@ class Dimmer:
             pass
 
 
-NAV_KEYS = {"Return", "Tab", "Up", "Down", "Left", "Right", "Escape", "Home", "End",
-            "Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R"}
+NAV_KEYS = {
+    "Return", "Tab", "Up", "Down", "Left", "Right", "Escape", "Home", "End",
+    "Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R"
+}
 
 
 class WebSchedulerApp:
@@ -366,7 +381,7 @@ class WebSchedulerApp:
         self.update_form_info()
         self.refresh_task_list()
         if len(self.zone_names) <= len(SPECIAL):
-            self.set_status("Time zone data is missing, so only device time and UTC are available.")
+            self.set_status("Time zone data is missing (pip install tzdata), so only device time and UTC are available.")
         self.root.after(AUTO_REFRESH_MS, self.auto_refresh)
 
     # ---------- Settings / window ----------
@@ -471,18 +486,22 @@ class WebSchedulerApp:
                 if not cb.winfo_exists():
                     continue
                 pop = self.root.tk.call("ttk::combobox::PopdownWindow", str(cb))
-                self.root.tk.call(f"{pop}.f.l", "configure",
-                                  "-background", pal["field"], "-foreground", pal["fg"],
-                                  "-selectbackground", pal["sel_bg"], "-selectforeground", pal["sel_fg"],
-                                  "-borderwidth", 0, "-highlightthickness", 0)
+                self.root.tk.call(
+                    f"{pop}.f.l", "configure",
+                    "-background", pal["field"], "-foreground", pal["fg"],
+                    "-selectbackground", pal["sel_bg"], "-selectforeground", pal["sel_fg"],
+                    "-borderwidth", 0, "-highlightthickness", 0
+                )
                 alive.append(cb)
             except Exception:
                 pass
         self.combos = alive
 
     def combo(self, parent, var, values, width, readonly=False):
-        cb = ttk.Combobox(parent, textvariable=var, values=values, width=width,
-                          state="readonly" if readonly else "normal")
+        cb = ttk.Combobox(
+            parent, textvariable=var, values=values, width=width,
+            state="readonly" if readonly else "normal"
+        )
         self.combos.append(cb)
         return cb
 
@@ -517,8 +536,10 @@ class WebSchedulerApp:
 
     def entered_datetime(self):
         try:
-            return datetime(int(self.year.get()), int(self.month.get()), int(self.day.get()),
-                            int(self.hour.get()), int(self.minute.get()))
+            return datetime(
+                int(self.year.get()), int(self.month.get()), int(self.day.get()),
+                int(self.hour.get()), int(self.minute.get())
+            )
         except ValueError:
             return None
 
@@ -662,8 +683,10 @@ class WebSchedulerApp:
         self.preview_label.grid(row=4, column=1, columnspan=2, sticky="w", padx=6)
 
         # Enter in the URL, date or time boxes schedules the launch
-        for w in [self.url_entry] + [c for row in (date_row, time_row)
-                                     for c in row.winfo_children() if isinstance(c, ttk.Combobox)]:
+        for w in [self.url_entry] + [
+            c for row in (date_row, time_row)
+            for c in row.winfo_children() if isinstance(c, ttk.Combobox)
+        ]:
             w.bind("<Return>", lambda e: self.schedule_launch())
 
         for var in (self.day, self.month, self.year, self.hour, self.minute):
@@ -685,16 +708,23 @@ class WebSchedulerApp:
         ttk.Label(b, text="Esc or double-click to exit.").pack(side="left")
 
         # ---- Task list ----
-        lf = ttk.LabelFrame(self.root, text="Scheduled Tasks (click a heading to sort, double-click a task to edit)",
-                            padding=12)
+        lf = ttk.LabelFrame(
+            self.root,
+            text="Scheduled Tasks (click a heading to sort, double-click a task to edit)",
+            padding=12
+        )
         lf.pack(fill="both", expand=True, padx=14, pady=(0, 10))
 
-        self.tree = ttk.Treeview(lf, columns=("Task", "Day", "Next", "Status"), show="headings", height=8,
-                                 selectmode="extended")
+        self.tree = ttk.Treeview(
+            lf, columns=("Task", "Day", "Next", "Status"),
+            show="headings", height=8, selectmode="extended"
+        )
         self.headings = {"Task": "Task / URL", "Day": "Day", "Next": "Next Run Time", "Status": "Status"}
         for col, w in (("Task", 280), ("Day", 60), ("Next", 140), ("Status", 80)):
-            self.tree.heading(col, text=self.headings[col],
-                              command=lambda c=col: self.sort_by("Next" if c == "Day" else c))
+            self.tree.heading(
+                col, text=self.headings[col],
+                command=lambda c=col: self.sort_by("Next" if c == "Day" else c)
+            )
             self.tree.column(col, width=self.px(w), minwidth=self.px(50), stretch=(col == "Task"))
         self.tree.pack(side="left", fill="both", expand=True)
         sb = ttk.Scrollbar(lf, orient="vertical", command=self.tree.yview)
@@ -725,12 +755,17 @@ class WebSchedulerApp:
             tz = self.zone(key)
             issue = zone_issue(dt, tz)
             if issue == "gap":
-                messagebox.showwarning("Input Error", "That time doesn't exist in this time zone because the clocks "
-                                                      "change that day. Please pick another time.")
+                messagebox.showwarning(
+                    "Input Error",
+                    "That time doesn't exist in this time zone because the clocks "
+                    "change that day. Please pick another time."
+                )
                 return None
             if issue == "ambiguous" and not messagebox.askokcancel(
-                    "Time happens twice", "The clocks go back in that time zone, so this time happens twice. "
-                                          "The first one will be used. Continue?"):
+                "Time happens twice",
+                "The clocks go back in that time zone, so this time happens twice. "
+                "The first one will be used. Continue?"
+            ):
                 return None
             dt = dt.replace(tzinfo=tz).astimezone().replace(tzinfo=None)
         if dt <= datetime.now():
@@ -738,14 +773,18 @@ class WebSchedulerApp:
             return None
         return dt
 
-    def create_task(self, name, command, dt):
-        cmd = ["schtasks", "/create", "/tn", name, "/tr", command, "/sc", "once",
-               "/st", dt.strftime("%H:%M"), "/sd", dt.strftime("%d/%m/%Y"), "/f"]
-        result = run(cmd)
+    def register_task(self, name, exe, arg, dt):
+        """Creates or updates a Windows Scheduled Task via PowerShell (avoids schtasks locale & quote bugs)."""
+        ps_script = (
+            f"$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '{arg.replace(chr(39), chr(39)*2)}'; "
+            f"$t = New-ScheduledTaskTrigger -Once -At '{dt:%Y-%m-%dT%H:%M:00}'; "
+            f"Register-ScheduledTask -TaskName '{name}' -Action $a -Trigger $t -Force | Out-Null"
+        )
+        result = run(["powershell", "-NoProfile", "-Command", ps_script])
         if result.returncode == 0:
             self.refresh_task_list()
             return True
-        messagebox.showerror("System Error", f"Could not create task.\n\n{result.stderr}")
+        messagebox.showerror("System Error", f"Could not schedule task.\n\n{result.stderr}")
         return False
 
     # ---------- Schedule ----------
@@ -760,9 +799,9 @@ class WebSchedulerApp:
         if not dt:
             return
 
-        domain = urlparse(url).netloc.replace(".", "_") or "WebLaunch"
+        domain = re.sub(r"[^A-Za-z0-9_-]", "_", urlparse(url).netloc) or "WebLaunch"
         name = f"{TASK_PREFIX}{domain}_{datetime.now():%H%M%S}"
-        if self.create_task(name, f'explorer.exe "{url}"', dt):
+        if self.register_task(name, "explorer.exe", f'"{url}"', dt):
             self.set_status(f"Scheduled {url} for {dt:%a %d/%m/%Y %H:%M} (your device time).")
             self.url_entry.clear()
 
@@ -772,7 +811,7 @@ class WebSchedulerApp:
             return
         name = f"{TASK_PREFIX}SHUTDOWN_{datetime.now():%H%M%S}"
         # 60-second countdown after it triggers, so you have time to abort
-        if self.create_task(name, "shutdown.exe /s /t 60", dt):
+        if self.register_task(name, "shutdown.exe", "/s /t 60", dt):
             self.set_status(f"PC will start shutting down at {dt:%a %d/%m/%Y %H:%M} (60 sec countdown).")
 
     def abort_shutdown(self):
@@ -839,8 +878,10 @@ class WebSchedulerApp:
                 day = datetime.strptime(nxt, DT_FMT).strftime("%a")
             except ValueError:
                 day = "-"
-            self.tree.insert("", "end", iid=name, values=(shown, day, nxt or "-", status),
-                             tags=("pending" if status == "Pending" else "done",))
+            self.tree.insert(
+                "", "end", iid=name, values=(shown, day, nxt or "-", status),
+                tags=("pending" if status == "Pending" else "done",)
+            )
         keep = [i for i in selected if self.tree.exists(i)]
         if keep:
             self.tree.selection_set(keep)
@@ -908,9 +949,12 @@ class WebSchedulerApp:
             ttk.Label(outer, text="Website URL:").grid(row=1, column=0, sticky="w", pady=6)
             ttk.Entry(outer, textvariable=url_var, width=45).grid(row=1, column=1, padx=10)
 
-        v = {k: tk.StringVar(value=val) for k, val in (
-            ("d", f"{d.day:02d}"), ("m", f"{d.month:02d}"), ("y", str(d.year)),
-            ("h", f"{d.hour:02d}"), ("min", f"{d.minute:02d}"))}
+        v = {
+            k: tk.StringVar(value=val) for k, val in (
+                ("d", f"{d.day:02d}"), ("m", f"{d.month:02d}"), ("y", str(d.year)),
+                ("h", f"{d.hour:02d}"), ("min", f"{d.minute:02d}")
+            )
+        }
         day_var = tk.StringVar(value=d.strftime("%a"))
 
         def update_day(*_):
@@ -940,34 +984,40 @@ class WebSchedulerApp:
         self.combo(tr, v["min"], [f"{i:02d}" for i in range(60)], 4).pack(side="left")
 
         ttk.Label(outer, text="Times here are in your device time zone.").grid(
-            row=4, column=1, sticky="w", padx=10, pady=(2, 0))
+            row=4, column=1, sticky="w", padx=10, pady=(2, 0)
+        )
 
         def save():
             try:
-                dt = datetime(int(v["y"].get()), int(v["m"].get()), int(v["d"].get()),
-                              int(v["h"].get()), int(v["min"].get()))
+                dt = datetime(
+                    int(v["y"].get()), int(v["m"].get()), int(v["d"].get()),
+                    int(v["h"].get()), int(v["min"].get())
+                )
             except ValueError:
-                messagebox.showwarning("Input Error", "That date or time isn't valid. Please use numbers only and check the values.", parent=win)
+                messagebox.showwarning(
+                    "Input Error",
+                    "That date or time isn't valid. Please use numbers only and check the values.",
+                    parent=win
+                )
                 return
             if dt <= datetime.now():
                 messagebox.showwarning("Input Error", "The time must be in the future.", parent=win)
                 return
-            cmd = ["schtasks", "/change", "/tn", name, "/st", dt.strftime("%H:%M"), "/sd", dt.strftime("%d/%m/%Y")]
-            if not is_shutdown:
+
+            if is_shutdown:
+                exe, arg = "shutdown.exe", "/s /t 60"
+            else:
                 url = url_var.get().strip()
                 if not url:
                     messagebox.showwarning("Input Error", "URL cannot be empty.", parent=win)
                     return
                 if not url.startswith(("http://", "https://")):
                     url = "https://" + url
-                cmd += ["/tr", f'explorer.exe "{url}"']
-            result = run(cmd)
-            if result.returncode == 0:
+                exe, arg = "explorer.exe", f'"{url}"'
+
+            if self.register_task(name, exe, arg, dt):
                 win.destroy()
-                self.refresh_task_list()
                 self.set_status("Task updated.")
-            else:
-                messagebox.showerror("System Error", f"Could not update task.\n\n{result.stderr}", parent=win)
 
         bf = ttk.Frame(outer)
         bf.grid(row=5, column=0, columnspan=2, pady=(14, 0))
