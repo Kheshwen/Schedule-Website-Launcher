@@ -1,1 +1,3 @@
 pyinstaller
+sv-ttk
+tzdata (optional)
