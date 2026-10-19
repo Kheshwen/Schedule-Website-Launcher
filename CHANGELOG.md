@@ -1,5 +1,29 @@
 # Changelog
 
+## [3.2] - October 19 2026
+### Added
+- Day column in the task list, plus the day of the week next to the date fields.
+- Time zone option: enter a date and time in another time zone (e.g. ET) and it converts to your device time.
+  - Searchable list of 36 regions plus UTC, with the current offset shown for the chosen date.
+  - Short names like ET, PT and IST work too.
+  - Live preview of when the task will run on your device, and how long from now.
+  - Handles daylight saving, and warns about times that don't exist or happen twice when clocks change.
+  - Remembers your last time zone.
+- Quick time buttons: +15m, +1h and +1d.
+- Right-click menu on tasks: Open URL Now, Copy URL, Edit and Delete.
+- Light and dark theme that follows Windows, with a Theme selector, a dark title bar, an accent Schedule Launch button, coloured task status and a URL hint in the input box.
+- Sharper text on high-resolution screens and the app icon in the window.
+### Changed
+- Tasks are now created, edited and deleted through PowerShell instead of `schtasks`, using ISO dates so scheduling no longer depends on the regional date format.
+- Scheduled launches wake the PC and run late if the scheduled time was missed. Shutdown tasks never run late.
+- Task names are cleaned so they only contain letters, numbers, `_` and `-`.
+- `setup.bat` now installs `sv-ttk` and `tzdata` and bundles the icon into the build.
+### Fixed
+- A failed task registration now shows the error instead of reporting success.
+- The quick time buttons count from the current time in the selected time zone, not device time.
+- If time zone data is missing, regions with daylight saving are hidden instead of showing a wrong fixed offset.
+- Right-click Open URL Now only opens `http` and `https` links.
+
 ## [3.1] - October 12 2026
 ### Added
 - Click a column heading to sort the task list by task, next run time or status.
