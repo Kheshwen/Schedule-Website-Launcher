@@ -20,7 +20,7 @@ def main():
         
         # Override the sv-ttk font size globally AFTER initialization
         style = ttk.Style()
-        style.configure('.', font=('Segoe UI', 13)) # '.' applies to all widgets
+        style.configure('.', font=('Segoe UI', 14)) # '.' applies to all widgets
         
         root.mainloop()
     except Exception:
