@@ -1,25 +1,28 @@
 @echo off
-cd /d "%~dp0"
+setlocal
+echo === Schedule Website Launcher V3.3 - build ===
 
-echo Checking PyInstaller...
 python -m PyInstaller --version >nul 2>&1
 if errorlevel 1 (
-    echo PyInstaller not found. Installing...
-    python -m pip install pyinstaller
+    echo Installing PyInstaller...
+    python -m pip install pyinstaller || goto :fail
 )
 
-echo Cleaning old build files...
-rmdir /s /q build dist 2>nul
-del /q "Website Launcher.spec" 2>nul
+echo Installing requirements...
+python -m pip install --upgrade -r requirements.txt || goto :fail
 
-echo Building the V3.1 Executable...
-python -m PyInstaller --noconsole --onedir --clean --icon icon.ico --name "Website Launcher" scheduler.py
+if exist build rmdir /s /q build
+if exist dist rmdir /s /q dist
 
-if errorlevel 1 (
-    echo.
-    echo Build FAILED. Check the errors above.
-) else (
-    echo.
-    echo Build complete! Your .exe is in the 'dist' folder.
-)
+python -m PyInstaller --noconsole --onedir --clean --icon icon.ico --add-data "icon.ico;." --collect-data sv_ttk --collect-data tzdata --name "Website Launcher" scheduler.py || goto :fail
+
+echo.
+echo Done. The app is in dist\Website Launcher\
 pause
+exit /b 0
+
+:fail
+echo.
+echo Build failed. See the messages above.
+pause
+exit /b 1
