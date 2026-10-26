@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.3] - October 27 2026
+Engineering and security release. No new features.
+### Security
+- Website links are now rebuilt and checked before use. Only `http` and `https` links are accepted. Links with a user name or password, bad host names and ports, and control characters are refused. Unsafe characters are percent-encoded.
+- Everything placed in a PowerShell command is quoted safely, including curly quotes. Tested with a seeded fuzz test.
+- Task names are checked against a strict pattern before they are created or deleted.
+- A task is now treated as a shutdown or a website by the program it runs, not by its name. Previously a link such as `SHUTDOWN.example.com` could be mistaken for a shutdown task.
+- `powershell`, `shutdown` and `explorer` run from their full Windows paths, and PowerShell calls time out after 30 seconds.
+- `settings.json` is treated as untrusted: size limit, type checks, unknown keys dropped, and saved safely so a crash can't corrupt it.
+- Task names get a random suffix, so two tasks created in the same second no longer overwrite each other.
+### Added
+- Log file at `%APPDATA%\WebsiteLauncher\launcher.log` (rotated, about 200 KB). It records only the website's host name, never the full link.
+- 45 unit tests for validation, scheduling scripts, time zones and settings, run on Windows and Linux by GitHub Actions.
+- `requirements.txt` and `requirements-dev.txt`.
+### Changed
+- Code split into a `launcher` package (time zones, tasks, validation, settings, logging, brightness and the window). `scheduler.py` is now a small entry point.
+- The task list is read in a locale-independent format.
+- Errors in the window are logged and shown in the status bar instead of failing silently.
+- `setup.bat` installs from `requirements.txt`.
+
+
 ## [3.2] - October 19 2026
 ### Added
 - Day column in the task list, plus the day of the week next to the date fields.

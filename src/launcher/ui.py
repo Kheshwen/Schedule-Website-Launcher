@@ -233,7 +233,7 @@ class WebSchedulerApp:
         try:
             import tkinter.font as tkfont
             # 1. Scale every font proportionally by 1.2x
-            scale_factor = 1.2 
+            scale_factor = 1.15 
             for font_name in tkfont.names():
                 f = tkfont.nametofont(font_name)
                 current_size = f.cget("size")
